@@ -1,0 +1,5 @@
+# Cargo build output (anchored: only the workspace-root target dir is in use).
+/target
+
+# Cargo.lock stays TRACKED: the workspace produces binaries and reproducible
+# builds are a supply-chain control. Do not add it here.
