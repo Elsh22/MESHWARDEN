@@ -1,4 +1,4 @@
-use mw_crypto::ed25519::Keypair;
+use mw_crypto::ed25519::{Keypair, PublicKey};
 use mw_crypto::{AlgId, Error, Hasher, Signer, Verifier, sha256};
 
 #[test]
@@ -69,4 +69,32 @@ fn malformed_signature_length_is_rejected() {
         .verify(msg, &sig)
         .expect_err("truncated signature must be rejected");
     assert!(matches!(err, Error::MalformedSignature { .. }));
+}
+
+#[test]
+fn public_key_verifies_peer_signature() {
+    let signer = Keypair::generate();
+    let msg = b"signed by a peer";
+    let sig = signer.sign(msg).expect("signing must succeed");
+    // Simulate receiving only the public key bytes over the wire.
+    let peer = PublicKey::from_bytes(&signer.public_key_bytes()).expect("valid key");
+    peer.verify(msg, &sig).expect("peer public key must verify");
+}
+
+#[test]
+fn public_key_rejects_wrong_signer() {
+    let a = Keypair::generate();
+    let b = Keypair::generate();
+    let sig = a.sign(b"from a").expect("signing must succeed");
+    let b_pub = PublicKey::from_bytes(&b.public_key_bytes()).expect("valid key");
+    assert!(matches!(
+        b_pub.verify(b"from a", &sig),
+        Err(mw_crypto::Error::VerificationFailed)
+    ));
+}
+
+#[test]
+fn malformed_public_key_is_rejected() {
+    let err = PublicKey::from_bytes(&[0u8; 10]).expect_err("short key must be rejected");
+    assert!(matches!(err, mw_crypto::Error::MalformedKey { .. }));
 }

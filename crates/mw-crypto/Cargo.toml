@@ -6,7 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 # ADR-007: mw-crypto is the sole home for primitive crypto crates.
-ed25519-dalek = { workspace = true, features = ["rand_core"] }
+ed25519-dalek = { workspace = true, features = ["rand_core", "zeroize"] }
 sha2 = { workspace = true }
 rand_core = { workspace = true }
 thiserror = { workspace = true }

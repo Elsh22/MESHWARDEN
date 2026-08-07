@@ -25,9 +25,9 @@ pub enum AlgId {
     /// Reserved (ADR-006): benchmarking only, never on a security path.
     MlKem768 = 0x0020,
     /// Reserved: not implemented in the PoC.
-    MlDsa87 = 0x0021,
+    MlDsa87 = 0x0030,
     /// Reserved: not implemented in the PoC.
-    SlhDsa128s = 0x0022,
+    SlhDsa128s = 0x0031,
 }
 
 impl core::fmt::Display for AlgId {
@@ -72,6 +72,8 @@ pub enum Error {
         expected_len: usize,
         actual_len: usize,
     },
+    #[error("malformed {alg} public key")]
+    MalformedKey { alg: AlgId },
     #[error("signature verification failed")]
     VerificationFailed,
 }
@@ -120,6 +122,7 @@ impl Hasher {
         }
     }
 }
+
 
 /// One-shot SHA-256 digest, tagged with [`AlgId::Sha256`].
 pub fn sha256(data: &[u8]) -> Digest {
