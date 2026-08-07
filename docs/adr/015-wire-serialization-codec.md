@@ -85,3 +85,33 @@ static-musl gate, and a documented, stable wire format.
 OFF (offline/partition tolerance), NFR degraded-link operation. Relates to
 ADR-005, ADR-006, ADR-007, ADR-008. New payload/canonical-form schemas are
 defined normatively under `docs/spec/`.
+
+---
+
+## Erratum 1 — 2026-08-07
+
+**Scope:** Documentation correction only. This erratum changes no encoding, no canonical
+bytes, no signature, and no golden vector.
+
+**Correction.** This ADR previously stated that the exact bytes covered by a
+`NodeCertificate` signature travel on the wire. That statement is inaccurate and is
+withdrawn.
+
+The certificate signing canonical form is a private, postcard-encoded representation that
+**excludes the issuer signature**. It is therefore not, by itself, a complete transferable
+certificate.
+
+The accurate statement is: the complete certificate wire representation transfers every field
+required to **deterministically reconstruct** the signing canonical form, together with the
+signature algorithm identifier and the signature bytes. A verifier reconstructs the signing
+bytes from the transferred fields and verifies the signature against them.
+
+**Unchanged by this erratum:**
+
+- postcard remains the canonical codec;
+- the signing canonical form is byte-identical to before;
+- all existing certificate golden vectors remain valid and must continue to pass;
+- no signature produced before this date is affected.
+
+**Introduced elsewhere:** the complete certificate wire representation
+(`certificate_wire_bytes`) is defined by ADR-017 and owned by `mw-identity`.
