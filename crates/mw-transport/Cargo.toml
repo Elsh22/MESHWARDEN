@@ -1,6 +1,17 @@
 [package]
 name = "mw-transport"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
+mw-proto = { path = "../mw-proto" }
+rustls = { workspace = true }
+rustls-rustcrypto = { workspace = true }
+tokio-rustls = { workspace = true }
+tokio = { workspace = true }
+# Slice-1 throwaway server certificate only (see src/devcert.rs).
+rcgen = { workspace = true }
+p256 = { workspace = true }
+rand_core = { workspace = true }
+thiserror = { workspace = true }

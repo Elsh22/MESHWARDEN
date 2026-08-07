@@ -36,7 +36,13 @@ license = "TODO"          # pick one before wiring deny.toml licenses to it
 [workspace.dependencies]
 # Near-term deps. Verify latest with `cargo add <crate>` in the owning crate.
 tokio         = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
-rustls        = "0.23"
+# ADR-016: no built-in (C-backed) provider — default features off, rustls-rustcrypto installed as default.
+rustls            = { version = "0.23", default-features = false, features = ["std"] }
+rustls-rustcrypto = "0.0.2-alpha"
+tokio-rustls      = { version = "0.26", default-features = false }
+# default-features off: rcgen's built-in backends are ring/aws-lc-rs (ADR-016 gate); we bring our own signer.
+rcgen             = { version = "0.14", default-features = false }
+p256              = "0.13"
 ed25519-dalek = "2"
 x25519-dalek  = "2"
 sha2          = "0.10"

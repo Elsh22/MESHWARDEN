@@ -28,6 +28,15 @@ pub enum Error {
     /// The signature does not verify over the canonical form.
     #[error("certificate signature verification failed")]
     BadSignature(#[source] mw_crypto::Error),
+    /// The certificate's `subject` is not the [`NodeId`] derived from its own
+    /// `public_key` — the name and the key material disagree.
+    #[error("certificate subject does not match its public key")]
+    SubjectKeyMismatch,
+    /// The certificate's `issuer` is not the [`NodeId`] derived from the
+    /// verifying key the caller supplied — a valid signature from the wrong
+    /// key would otherwise pass.
+    #[error("certificate issuer does not match the supplied issuer public key")]
+    IssuerKeyMismatch,
     /// ADR-009: the validity window is longer than
     /// [`MAX_CERT_LIFETIME_SECS`], or inverted (`valid_until < valid_from`).
     #[error(

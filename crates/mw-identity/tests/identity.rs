@@ -123,6 +123,44 @@ fn tampering_with_capabilities_breaks_the_binding() {
 }
 
 #[test]
+fn subject_key_mismatch_is_rejected_by_sign_and_verify() {
+    let issuer = Keystore::generate();
+    let subject = Keystore::generate();
+    let impostor = Keystore::generate();
+
+    // sign refuses to mint a certificate whose subject isn't derived from
+    // its public_key.
+    let mut inconsistent = fields(&subject, &issuer, 1_000, 2_000);
+    inconsistent.subject = impostor.node_id();
+    let result = NodeCertificate::sign(inconsistent, &issuer);
+    assert!(matches!(result, Err(Error::SubjectKeyMismatch)), "{result:?}");
+
+    // verify rejects the same inconsistency on a received certificate,
+    // regardless of the signature.
+    let mut cert = NodeCertificate::sign(fields(&subject, &issuer, 1_000, 2_000), &issuer).unwrap();
+    cert.subject = impostor.node_id();
+    let result = cert.verify(&verifier_of(&issuer), 1_500);
+    assert!(matches!(result, Err(Error::SubjectKeyMismatch)), "{result:?}");
+}
+
+#[test]
+fn wrong_issuer_key_fails_as_issuer_mismatch_not_bad_signature() {
+    let issuer = Keystore::generate();
+    let subject = Keystore::generate();
+    let other = Keystore::generate();
+
+    let cert = NodeCertificate::sign(fields(&subject, &issuer, 1_000, 2_000), &issuer).unwrap();
+
+    // `other`'s key is a perfectly valid Ed25519 key — just not the one the
+    // certificate names as issuer.
+    let result = cert.verify(&verifier_of(&other), 1_500);
+    assert!(
+        matches!(result, Err(Error::IssuerKeyMismatch)),
+        "expected IssuerKeyMismatch, got {result:?}"
+    );
+}
+
+#[test]
 fn lifetime_over_the_maximum_is_rejected_at_construction() {
     let issuer = Keystore::generate();
     let subject = Keystore::generate();

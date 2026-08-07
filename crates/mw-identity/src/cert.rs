@@ -108,7 +108,13 @@ impl NodeCertificate {
     ///
     /// Enforces [`MAX_CERT_LIFETIME_SECS`] before signing (ADR-009). The
     /// signature is over the postcard canonical form (ADR-015).
+    /// Refuses to mint a certificate whose `subject` is not the [`NodeId`]
+    /// derived from its `public_key` ([`Error::SubjectKeyMismatch`]), so a
+    /// name/key-inconsistent certificate never exists with a valid signature.
     pub fn sign(fields: CertificateFields, issuer: &impl Signer) -> Result<Self> {
+        if fields.subject != NodeId::from_public_key_bytes(&fields.public_key) {
+            return Err(Error::SubjectKeyMismatch);
+        }
         check_lifetime(fields.valid_from, fields.valid_until)?;
         let msg = canonical_bytes(
             &fields.subject,
@@ -135,7 +141,20 @@ impl NodeCertificate {
     ///
     /// `now` (unix seconds) is injected by the caller — this crate never
     /// reads an ambient clock, so validity is testable at any instant.
+    ///
+    /// Before the signature check, enforces identity/key self-consistency:
+    /// `subject` must be the [`NodeId`] derived from the certificate's own
+    /// `public_key`, and `issuer` must be the [`NodeId`] derived from
+    /// `issuer_public_key` — a NodeId is *defined* as the hash of a key, so a
+    /// certificate whose names disagree with its key material is invalid no
+    /// matter who signed it.
     pub fn verify(&self, issuer_public_key: &PublicKey, now: u64) -> Result<()> {
+        if self.subject != NodeId::from_public_key_bytes(&self.public_key) {
+            return Err(Error::SubjectKeyMismatch);
+        }
+        if self.issuer != NodeId::from_public_key_bytes(&issuer_public_key.to_bytes()) {
+            return Err(Error::IssuerKeyMismatch);
+        }
         let msg = canonical_bytes(
             &self.subject,
             &self.public_key,
