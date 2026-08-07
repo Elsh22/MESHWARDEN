@@ -9,17 +9,22 @@
 //! throwaway ([`devcert`]) with no relation to any mesh identity. How a peer
 //! is bound to a `NodeId`/`NodeCertificate` is a security-architecture
 //! decision that lands in slice 2 once ADR-017 is settled. **Nothing may
-//! make trust decisions on a slice-1 channel.**
+//! make trust decisions on a slice-1 channel.** To make that structural
+//! rather than prose, every stream produced by [`channel::connect`] /
+//! [`channel::accept`] is wrapped in the [`channel::Unauthenticated`]
+//! marker type.
 //!
 //! Also deferred to slice 2 / ADR-017: mutual client authentication, channel
 //! binding (exported keying material), real TCP sockets, session/replay
-//! handling. This crate does not yet depend on `mw-crypto` or `mw-identity`.
+//! handling. This crate declares no direct dependency on `mw-crypto` or
+//! `mw-identity` (`mw-crypto` is still reachable transitively through
+//! `mw-proto`, which carries `AlgId` — an ADR-007-sanctioned edge).
 
 pub mod channel;
 pub mod devcert;
 pub mod verify;
 
-pub use channel::{FramedChannel, accept, client_config, connect, server_config};
+pub use channel::{FramedChannel, Unauthenticated, accept, client_config, connect, server_config};
 
 /// Installs `rustls-rustcrypto` as the process-default rustls
 /// [`CryptoProvider`](rustls::crypto::CryptoProvider) (ADR-016). No built-in

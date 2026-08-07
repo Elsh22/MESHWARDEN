@@ -19,7 +19,7 @@ async fn tls13_hello_frame_round_trips_over_duplex() {
     let server = tokio::spawn(async move {
         let tls = accept(server_cfg, server_io).await?;
         assert_eq!(
-            tls.get_ref().1.protocol_version(),
+            tls.get_ref().get_ref().1.protocol_version(),
             Some(rustls::ProtocolVersion::TLSv1_3),
             "server negotiated something other than TLS 1.3"
         );
@@ -32,7 +32,7 @@ async fn tls13_hello_frame_round_trips_over_duplex() {
         .await
         .expect("client handshake completes");
     assert_eq!(
-        tls.get_ref().1.protocol_version(),
+        tls.get_ref().get_ref().1.protocol_version(),
         Some(rustls::ProtocolVersion::TLSv1_3),
         "client negotiated something other than TLS 1.3"
     );
@@ -62,4 +62,64 @@ async fn tls13_hello_frame_round_trips_over_duplex() {
 
     let received_hello = Hello::from_bytes(&received.payload).expect("payload decodes");
     assert_eq!(received_hello, hello, "Hello must round-trip");
+}
+
+/// The `decode_prefix` buffering loop must reassemble frames from arbitrary
+/// chunk boundaries: two back-to-back frames are written in 3-byte slices
+/// (splitting both headers and payloads) and must decode intact and in
+/// order. Runs over a bare duplex — the framing layer is stream-agnostic,
+/// so TLS is not needed to exercise it.
+#[tokio::test]
+async fn buffered_decode_reassembles_split_frames() {
+    // Capacity 3 caps every read at 3 bytes, so `recv` is forced through the
+    // partial-header and partial-payload paths of the decode_prefix loop.
+    let (mut writer, reader) = tokio::io::duplex(3);
+
+    let frame_a = Frame::new(WireVersion::V1, MessageType::Hello, vec![0xAA; 5]);
+    let frame_b = Frame::new(WireVersion::V1, MessageType::Hello, vec![0xBB; 19]);
+    let mut bytes = frame_a.encode().expect("frame encodes");
+    bytes.extend_from_slice(&frame_b.encode().expect("frame encodes"));
+
+    let writer_task = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt as _;
+        for chunk in bytes.chunks(3) {
+            writer.write_all(chunk).await.expect("chunk writes");
+            writer.flush().await.expect("chunk flushes");
+        }
+        writer // keep the write side open until both frames are read
+    });
+
+    let mut channel = FramedChannel::new(reader);
+    let got_a = channel.recv().await.expect("first frame decodes");
+    let got_b = channel.recv().await.expect("second frame decodes");
+    assert_eq!(got_a, frame_a, "first frame must survive 3-byte chunking");
+    assert_eq!(got_b, frame_b, "second frame must survive 3-byte chunking");
+
+    drop(writer_task.await.expect("writer task completes"));
+}
+
+/// ADR-016: the process-default rustls provider must be `rustls-rustcrypto`.
+/// `CryptoProvider` has no identity accessor, so compare the cipher-suite
+/// set — the pure-Rust provider's suite list differs from every C-backed
+/// built-in, so equality pins the provider.
+#[test]
+fn installed_provider_is_rustls_rustcrypto() {
+    mw_transport::install_default_provider();
+    let installed = rustls::crypto::CryptoProvider::get_default()
+        .expect("install_default_provider installed one");
+
+    let expected = rustls_rustcrypto::provider();
+    let installed_suites: Vec<_> = installed.cipher_suites.iter().map(|s| s.suite()).collect();
+    let expected_suites: Vec<_> = expected.cipher_suites.iter().map(|s| s.suite()).collect();
+    assert_eq!(
+        installed_suites, expected_suites,
+        "installed provider's cipher suites are not rustls-rustcrypto's"
+    );
+
+    let installed_groups: Vec<_> = installed.kx_groups.iter().map(|g| g.name()).collect();
+    let expected_groups: Vec<_> = expected.kx_groups.iter().map(|g| g.name()).collect();
+    assert_eq!(
+        installed_groups, expected_groups,
+        "installed provider's key-exchange groups are not rustls-rustcrypto's"
+    );
 }

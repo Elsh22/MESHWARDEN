@@ -1,5 +1,5 @@
-use mw_crypto::AlgId;
 use mw_crypto::ed25519::PublicKey;
+use mw_crypto::{AlgId, Signature};
 use mw_identity::{
     CertificateFields, Error, Keystore, MAX_CERT_LIFETIME_SECS, NodeCertificate, NodeId,
 };
@@ -157,6 +157,125 @@ fn wrong_issuer_key_fails_as_issuer_mismatch_not_bad_signature() {
     assert!(
         matches!(result, Err(Error::IssuerKeyMismatch)),
         "expected IssuerKeyMismatch, got {result:?}"
+    );
+}
+
+#[test]
+fn self_signed_certificate_with_issuer_equal_subject_verifies() {
+    // Root/self-signed case: issuer == subject. Both self-consistency
+    // checks (subject vs own key, issuer vs supplied key) must pass and
+    // verification must succeed.
+    let node = Keystore::generate();
+    let cert = NodeCertificate::sign(fields(&node, &node, 1_000, 2_000), &node)
+        .expect("self-signed certificate must sign");
+    assert_eq!(cert.subject, cert.issuer);
+    cert.verify(&verifier_of(&node), 1_500)
+        .expect("self-signed certificate must verify");
+}
+
+#[test]
+fn tampered_signature_bytes_fail_as_bad_signature() {
+    let issuer = Keystore::generate();
+    let subject = Keystore::generate();
+    let mut cert = NodeCertificate::sign(fields(&subject, &issuer, 1_000, 2_000), &issuer).unwrap();
+
+    // Same length, one byte flipped: still a well-formed signature encoding,
+    // so the failure must come from verification, not parsing.
+    let last = cert.signature.bytes.len() - 1;
+    cert.signature.bytes[last] ^= 0xFF;
+
+    let result = cert.verify(&verifier_of(&issuer), 1_500);
+    assert!(
+        matches!(result, Err(Error::BadSignature(_))),
+        "expected BadSignature after signature tamper, got {result:?}"
+    );
+}
+
+#[test]
+fn expired_certificate_with_wrong_issuer_reports_issuer_mismatch() {
+    // PINS CURRENT BEHAVIOR — OPEN ARCHITECTURAL QUESTION. The spec orders
+    // the mismatch checks before *signature* verification but is silent on
+    // precedence relative to *temporal* validation. Today `verify` runs
+    // subject check, issuer check, signature, then the time window, so a
+    // certificate that is both expired and issuer-mismatched reports
+    // IssuerKeyMismatch. If an ADR later rules that temporal validation
+    // comes first, this test is the one that must change — do not "fix" it
+    // without that ruling.
+    let issuer = Keystore::generate();
+    let subject = Keystore::generate();
+    let other = Keystore::generate();
+    let cert = NodeCertificate::sign(fields(&subject, &issuer, 1_000, 2_000), &issuer).unwrap();
+
+    let result = cert.verify(&verifier_of(&other), 3_000); // expired AND wrong issuer
+    assert!(
+        matches!(result, Err(Error::IssuerKeyMismatch)),
+        "current behavior: mismatch checks precede temporal validation, got {result:?}"
+    );
+}
+
+/// Records the exact message handed to the signer, so the canonical signing
+/// form can be pinned without any secret-key material.
+struct CapturingSigner(std::cell::RefCell<Vec<u8>>);
+
+impl mw_crypto::Signer for CapturingSigner {
+    fn sign(&self, msg: &[u8]) -> mw_crypto::Result<Signature> {
+        *self.0.borrow_mut() = msg.to_vec();
+        Ok(Signature {
+            alg: AlgId::Ed25519,
+            bytes: vec![0u8; 64],
+        })
+    }
+}
+
+#[test]
+fn golden_vector_canonical_form_and_node_id_are_unchanged() {
+    // CANONICAL-FORM golden vector, minted from the implementation as
+    // audited on 2026-08-07. It pins the NodeId derivation and the exact
+    // canonical signing bytes (ADR-015) for fixed inputs. If it starts
+    // failing, the canonical form or the NodeId derivation changed — both
+    // are locked; that is a semantics break, not a test to update casually.
+    //
+    // It does NOT assert signature bytes: `Keystore`/`Keypair` expose no
+    // seeded constructor (deliberately), so a real fixed-key signature
+    // cannot be produced without widening the mw-crypto API.
+    let subject_pk = [0x11u8; 32];
+    let issuer_pk = [0x22u8; 32];
+
+    let subject = NodeId::from_public_key_bytes(&subject_pk);
+    let issuer = NodeId::from_public_key_bytes(&issuer_pk);
+    assert_eq!(subject.to_string(), "mw:node:ALKETIY7XMTHZDZVF2MWRJ46HY");
+    assert_eq!(issuer.to_string(), "mw:node:T5ZOUDHUSU3OHRTMPB7XAUMG34");
+
+    let signer = CapturingSigner(std::cell::RefCell::new(Vec::new()));
+    let cert = NodeCertificate::sign(
+        CertificateFields {
+            subject,
+            public_key: subject_pk.to_vec(),
+            capabilities: vec![AlgId::Ed25519, AlgId::Sha256],
+            valid_from: 1_000,
+            valid_until: 2_000,
+            issuer,
+        },
+        &signer,
+    )
+    .expect("golden fields must sign");
+    assert_eq!(cert.subject, subject);
+
+    let canonical_hex: String = signer
+        .0
+        .borrow()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(
+        canonical_hex,
+        // postcard: subject string (len 0x22 = 34), 32-byte public key,
+        // 2 capability codes (0x0001, 0x0010 as varints), valid_from 1000,
+        // valid_until 2000 (varints), issuer string.
+        "226d773a6e6f64653a414c4b4554495937584d54485a445a5646324d57524a34364859\
+         2011111111111111111111111111111111111111111111111111111111111111110201\
+         10e807d00f226d773a6e6f64653a54355a4f554448555355334f4852544d5042375841\
+         554d473334"
     );
 }
 

@@ -1,15 +1,67 @@
 //! TLS 1.3 session establishment and `mw-proto` framing over the stream.
 
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use mw_proto::Frame;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, ServerConfig};
-use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, ReadBuf};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 use crate::verify::AcceptAnyServerCert;
 use crate::{Error, Result, install_default_provider};
+
+/// Marker wrapper for a slice-1 TLS stream: the channel inside is
+/// confidential against passive observers but **NOT mesh-authenticated** —
+/// the peer has not been bound to any `NodeId`/`NodeCertificate` (that is
+/// ADR-017 / slice 2). Every stream produced by [`connect`] and [`accept`]
+/// is wrapped in this type so no caller can mistake it for an authenticated
+/// channel. **Nothing may make trust decisions on it.**
+#[derive(Debug)]
+pub struct Unauthenticated<S>(S);
+
+impl<S> Unauthenticated<S> {
+    /// The wrapped stream (e.g. to inspect the negotiated TLS parameters).
+    pub fn get_ref(&self) -> &S {
+        &self.0
+    }
+
+    /// Unwraps the stream. The unauthenticated caveat still applies to
+    /// whatever the caller does with it.
+    pub fn into_inner(self) -> S {
+        self.0
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Unauthenticated<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Unauthenticated<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.get_mut().0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().0).poll_shutdown(cx)
+    }
+}
 
 /// TLS 1.3-only client configuration using the process-default provider
 /// (ADR-016) and the slice-1 placeholder verifier ([`AcceptAnyServerCert`]):
@@ -38,32 +90,37 @@ pub fn server_config(
 }
 
 /// Runs the client side of the TLS handshake over any async byte stream
-/// (e.g. one end of `tokio::io::duplex`).
+/// (e.g. one end of `tokio::io::duplex`). The result is deliberately
+/// [`Unauthenticated`]: slice 1 binds no peer identity.
 pub async fn connect<S>(
     config: Arc<ClientConfig>,
     server_name: ServerName<'static>,
     io: S,
-) -> Result<tokio_rustls::client::TlsStream<S>>
+) -> Result<Unauthenticated<tokio_rustls::client::TlsStream<S>>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     TlsConnector::from(config)
         .connect(server_name, io)
         .await
+        .map(Unauthenticated)
         .map_err(Error::Handshake)
 }
 
 /// Runs the server side of the TLS handshake over any async byte stream.
+/// The result is deliberately [`Unauthenticated`]: slice 1 binds no peer
+/// identity.
 pub async fn accept<S>(
     config: Arc<ServerConfig>,
     io: S,
-) -> Result<tokio_rustls::server::TlsStream<S>>
+) -> Result<Unauthenticated<tokio_rustls::server::TlsStream<S>>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     TlsAcceptor::from(config)
         .accept(io)
         .await
+        .map(Unauthenticated)
         .map_err(Error::Handshake)
 }
 

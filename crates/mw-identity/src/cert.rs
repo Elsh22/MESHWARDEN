@@ -112,6 +112,9 @@ impl NodeCertificate {
     /// derived from its `public_key` ([`Error::SubjectKeyMismatch`]), so a
     /// name/key-inconsistent certificate never exists with a valid signature.
     pub fn sign(fields: CertificateFields, issuer: &impl Signer) -> Result<Self> {
+        // Subject/issuer NodeId comparisons here and in `verify` operate on
+        // public data (identities derived from public keys), so a
+        // non-constant-time `!=` leaks nothing.
         if fields.subject != NodeId::from_public_key_bytes(&fields.public_key) {
             return Err(Error::SubjectKeyMismatch);
         }
