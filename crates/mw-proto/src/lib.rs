@@ -3,9 +3,9 @@
 //! Depends only on [`mw_crypto`] among `mw-*` crates. Crypto-bearing fields
 //! carry [`mw_crypto::AlgId`]; no fixed-size crypto arrays (ADR-007).
 //!
-//! TODO: choose a concrete payload codec (e.g. CBOR, postcard). Framing is
-//! length-delimited and codec-agnostic; `serde` derives are prepared for that
-//! choice but no format crate is pulled in yet.
+//! Payload codec is postcard (ADR-015). Framing is length-delimited with a
+//! hand-rolled big-endian header and stays codec-agnostic; payload types
+//! expose `to_bytes`/`from_bytes` backed by postcard.
 
 mod alg;
 mod error;

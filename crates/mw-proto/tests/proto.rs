@@ -103,6 +103,89 @@ fn oversized_payload_declaration_is_rejected() {
 }
 
 #[test]
+fn decode_prefix_leaves_trailing_bytes_and_recovers_next_frame() {
+    let first = Frame::new(WireVersion::V1, MessageType::Hello, b"first".to_vec());
+    let second = Frame::new(WireVersion::V1, MessageType::Hello, b"second-payload".to_vec());
+
+    let frame_bytes = first.encode().expect("encode first");
+    let mut buf = frame_bytes.clone();
+    buf.extend_from_slice(&second.encode().expect("encode second"));
+
+    let (decoded, consumed) = Frame::decode_prefix(&buf)
+        .expect("prefix decode must succeed")
+        .expect("complete frame must be present");
+    assert_eq!(decoded, first);
+    assert_eq!(consumed, frame_bytes.len());
+
+    let (decoded_next, consumed_next) = Frame::decode_prefix(&buf[consumed..])
+        .expect("second prefix decode must succeed")
+        .expect("second frame must be present");
+    assert_eq!(decoded_next, second);
+    assert_eq!(consumed + consumed_next, buf.len());
+}
+
+#[test]
+fn decode_prefix_returns_none_on_partial_header() {
+    let bytes = Frame::new(WireVersion::V1, MessageType::Hello, b"abc".to_vec())
+        .encode()
+        .expect("encode");
+    // Every prefix shorter than the 8-byte header is "need more data".
+    for n in 0..8 {
+        let out = Frame::decode_prefix(&bytes[..n]).expect("partial header must not error");
+        assert!(out.is_none(), "expected None at len {n}");
+    }
+}
+
+#[test]
+fn decode_prefix_returns_none_on_partial_payload() {
+    let bytes = Frame::new(WireVersion::V1, MessageType::Hello, vec![1, 2, 3, 4])
+        .encode()
+        .expect("encode");
+    // Full header present, payload incomplete.
+    for n in 8..bytes.len() {
+        let out = Frame::decode_prefix(&bytes[..n]).expect("partial payload must not error");
+        assert!(out.is_none(), "expected None at len {n}");
+    }
+}
+
+#[test]
+fn decode_prefix_rejects_oversized_declaration_before_buffering() {
+    let mut header = Vec::new();
+    header.extend_from_slice(&WireVersion::V1.major.to_be_bytes());
+    header.extend_from_slice(&MessageType::Hello.as_u16().to_be_bytes());
+    let too_big = (MAX_PAYLOAD_LEN as u32).saturating_add(1);
+    header.extend_from_slice(&too_big.to_be_bytes());
+
+    // Buffer is truncated (no payload bytes at all), yet the bogus length is
+    // rejected immediately instead of waiting for more input.
+    let err = Frame::decode_prefix(&header).expect_err("oversized length must fail");
+    assert!(matches!(
+        err,
+        Error::PayloadTooLarge {
+            len,
+            max: MAX_PAYLOAD_LEN
+        } if len == MAX_PAYLOAD_LEN + 1
+    ));
+}
+
+#[test]
+fn hello_postcard_round_trip() {
+    let hello = Hello {
+        supported_algs: vec![AlgId::Ed25519, AlgId::X25519, AlgId::Sha256],
+    };
+    let bytes = hello.to_bytes().expect("to_bytes must succeed");
+    let decoded = Hello::from_bytes(&bytes).expect("from_bytes must succeed");
+    assert_eq!(decoded, hello);
+}
+
+#[test]
+fn hello_from_bytes_rejects_garbage_without_panic() {
+    let garbage: &[u8] = &[0xFF, 0xFE, 0xFD, 0xFC, 0xDE, 0xAD, 0xBE, 0xEF, 0x42, 0x00];
+    let err = Hello::from_bytes(garbage).expect_err("garbage must be rejected");
+    assert_eq!(err, Error::MalformedPayload);
+}
+
+#[test]
 fn hello_shape_carries_alg_ids() {
     let hello = Hello {
         supported_algs: vec![AlgId::Ed25519, AlgId::Sha256],

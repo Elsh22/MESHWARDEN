@@ -41,7 +41,8 @@ impl MessageType {
 /// No fixed-size crypto arrays (ADR-007). Crypto-bearing fields inside
 /// payloads carry [`mw_crypto::AlgId`].
 ///
-/// TODO: choose a concrete payload codec; `payload` remains opaque bytes here.
+/// Payload codec is postcard (ADR-015); `payload` remains opaque bytes at the
+/// framing layer. The framing header stays hand-rolled big-endian.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Frame {
     pub version: WireVersion,
@@ -89,10 +90,28 @@ impl Frame {
     /// Decodes a single complete frame from `bytes`.
     ///
     /// Rejects truncated/malformed input, unsupported wire majors, and
-    /// oversized payloads without panicking.
+    /// oversized payloads without panicking. Trailing bytes after the frame
+    /// are treated as malformed; use [`Frame::decode_prefix`] for streams.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
+        match Self::decode_prefix(bytes)? {
+            Some((frame, consumed)) if consumed == bytes.len() => Ok(frame),
+            _ => Err(Error::MalformedFrame),
+        }
+    }
+
+    /// Decodes one frame from the front of `bytes`, for stream reassembly.
+    ///
+    /// Returns `Ok(None)` when `bytes` does not yet hold a complete frame
+    /// (partial header or partial payload); the caller should buffer more
+    /// input and retry. On success returns the frame and the number of bytes
+    /// consumed, leaving any trailing bytes for the caller.
+    ///
+    /// Unsupported wire majors and oversized payload declarations are
+    /// rejected as soon as the header is available, so a bogus huge length
+    /// fails without buffering toward it.
+    pub fn decode_prefix(bytes: &[u8]) -> Result<Option<(Self, usize)>> {
         if bytes.len() < HEADER_LEN {
-            return Err(Error::MalformedFrame);
+            return Ok(None);
         }
 
         let version = WireVersion {
@@ -113,14 +132,17 @@ impl Frame {
         }
 
         let total = HEADER_LEN + payload_len;
-        if bytes.len() != total {
-            return Err(Error::MalformedFrame);
+        if bytes.len() < total {
+            return Ok(None);
         }
 
-        Ok(Self {
-            version,
-            message_type,
-            payload: bytes[HEADER_LEN..total].to_vec(),
-        })
+        Ok(Some((
+            Self {
+                version,
+                message_type,
+                payload: bytes[HEADER_LEN..total].to_vec(),
+            },
+            total,
+        )))
     }
 }

@@ -45,3 +45,5 @@ axum          = "0.8"
 thiserror     = "2"
 anyhow        = "1"
 serde         = { version = "1", features = ["derive"] }
+postcard      = { version = "1", features = ["use-std"] }
+data-encoding = "2"

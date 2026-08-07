@@ -1,6 +1,13 @@
 [package]
 name = "mw-identity"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 
 [dependencies]
+# ADR-007: crypto only via mw-crypto; no primitive crypto crates here.
+mw-crypto = { path = "../mw-crypto" }
+postcard = { workspace = true }
+data-encoding = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

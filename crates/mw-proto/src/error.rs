@@ -18,6 +18,11 @@ pub enum Error {
     /// Declared payload length exceeds [`crate::MAX_PAYLOAD_LEN`].
     #[error("payload too large: {len} bytes exceeds limit {max}")]
     PayloadTooLarge { len: usize, max: usize },
+
+    /// Payload bytes failed to decode under the payload codec (postcard,
+    /// ADR-015).
+    #[error("malformed payload")]
+    MalformedPayload,
 }
 
 pub type Result<T> = core::result::Result<T, Error>;

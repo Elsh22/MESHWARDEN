@@ -3,7 +3,7 @@
 use mw_crypto::AlgId;
 use serde::{Deserialize, Serialize};
 
-use crate::{alg_from_u16, alg_to_u16};
+use crate::{alg_from_u16, alg_to_u16, Error, Result};
 
 /// Negotiation hello: the set of algorithms this node claims to support.
 ///
@@ -11,12 +11,25 @@ use crate::{alg_from_u16, alg_to_u16};
 /// asserted in-handshake (ADR-008). The cryptographic binding of this set to
 /// a node identity lands in `mw-identity`; this type is only the wire shape.
 ///
-/// TODO: payload codec choice — `serde` derives are ready; no format crate yet.
+/// Payload codec is postcard (ADR-015); see [`Hello::to_bytes`] and
+/// [`Hello::from_bytes`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
     /// Supported algorithms. Serialized as registry `u16` wire codes.
     #[serde(serialize_with = "serialize_algs", deserialize_with = "deserialize_algs")]
     pub supported_algs: Vec<AlgId>,
+}
+
+impl Hello {
+    /// Encodes this hello as postcard bytes (ADR-015).
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        postcard::to_allocvec(self).map_err(|_| Error::MalformedPayload)
+    }
+
+    /// Decodes a hello from postcard bytes (ADR-015).
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        postcard::from_bytes(bytes).map_err(|_| Error::MalformedPayload)
+    }
 }
 
 fn serialize_algs<S>(algs: &[AlgId], serializer: S) -> core::result::Result<S::Ok, S::Error>
