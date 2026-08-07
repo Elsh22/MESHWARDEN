@@ -1,0 +1,16 @@
+---
+description: Rules for authoring Mermaid diagrams so they render on the first try
+globs: ["docs/**/*.md", "**/*.mermaid"]
+alwaysApply: false
+---
+# Mermaid diagram rules (hard-established)
+
+Every Mermaid block must render on the first pass. Violations have repeatedly broken diagrams in this repo.
+
+- ASCII-only in labels. No emoji, no smart quotes, no non-ASCII glyphs (no stars, warning signs, arrow characters). Write "agility layer", not "* agility layer". Keep arrows/symbols out of label text.
+- No `&` fan-in or fan-out. One edge per line: `A --> B` then `A --> C`. Never `A --> B & C`.
+- One connected component (or one labeled subgraph) per block. No floating or empty nodes like `X[" "]`. If a node depends on everything (e.g. mw-telemetry, mw-testkit), omit it from the graph and state that in prose instead of drawing an edge to a placeholder.
+- Short labels. A few words per node; put detail in the surrounding prose.
+- Use explicit node IDs with bracketed labels: `CRYPTO["mw-crypto"]`.
+
+When a graph is large, split it into multiple blocks that are each a single connected component rather than forcing one oversized diagram.

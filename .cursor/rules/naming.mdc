@@ -1,0 +1,16 @@
+---
+description: MESHWARDEN naming and convention locks
+globs: []
+alwaysApply: true
+---
+# MESHWARDEN conventions (locked)
+
+- Crates: `mw-<domain>`, lowercase, hyphenated. Binaries: `mw-<role>`.
+- Wire enums: SCREAMING_SNAKE on the wire, PascalCase in Rust.
+- IDs: ULID (sortable, timestamp-prefixed) for task, unit, lease, audit.
+- Node identity: Ed25519 pubkey fingerprint, `mw:node:<base32-sha256-prefix>`.
+- Versioning: wire format `v<major>`, independent of binary semver.
+- Timestamps: RFC 3339 UTC on the wire, with a Lamport counter alongside every wall clock (ordering + offline merge; THR-6).
+- Logs: JSON Lines, one schema, `event_type` discriminator.
+- Errors: `thiserror` in libraries, `anyhow` in binaries only.
+- Feature flags: `pq-hybrid` (off in PoC), `tpm`, `oci-sandbox`.

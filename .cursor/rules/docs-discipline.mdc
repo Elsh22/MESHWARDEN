@@ -1,0 +1,13 @@
+---
+description: Documentation discipline — ADR citation, normative specs, traceability, ID namespaces
+globs: ["docs/**/*.md"]
+alwaysApply: false
+---
+# Docs discipline
+
+- Phase docs (00-08) explain and cite decisions; they never restate or re-argue them. A locked decision lives in exactly one ADR under `docs/adr/`; phase docs reference `ADR-nnn`.
+- `spec/` is normative. Schemas (wire format, manifests, identity, audit, policy, etc.) live in `docs/spec/` only. When a schema changes, change `spec/` and reference it — never fork a copy into a phase doc, the code, or a demo script.
+- Coupled decisions are load-bearing. ADR-009 (Ed25519 hot path coupled to hours-scale cert lifetime) must be recorded in `docs/adr/README.md` under a "Coupled decisions" section. Never change one side without re-deriving the other.
+- Use the fixed ID namespaces, defined where noted: FR/NFR/SEC/PERF/HW/OFF/HITL (01-prd), THR/CTL/RSK (03-threat-model), ADR-nnn (adr/), TST/DEM (07-roadmap). Reuse existing IDs; never silently renumber.
+- `traceability.md` stays one flat Markdown table (Req, Component, Threat, Control, Test, Demo, ADR, Residual). Do not build tooling to generate it.
+- Keep terms consistent with `glossary.md`. Private-mesh PKI (`mw-ca` issuance audit) is not public-web PKI (certificate transparency) — do not conflate them.

@@ -1,0 +1,18 @@
+---
+description: Enforce the mw-crypto agility boundary and PoC crypto confinement (ADR-005..009)
+globs: ["crates/**/*.rs", "bin/**/*.rs", "Cargo.toml", "deny.toml"]
+alwaysApply: false
+---
+# Crypto boundary — ADR-007 is a correctness requirement, not future-proofing
+
+`mw-crypto` is the sole crypto boundary. Every crypto operation routes through it.
+
+- Only `mw-crypto` may import primitive crypto crates: `ed25519-dalek`, `x25519-dalek`, `sha2`, `ml-kem`, or any other RustCrypto primitive. Every other crate that needs crypto depends on `mw-crypto`, never on a primitive directly.
+- `ml-kem` may appear ONLY under `bin/mw-sim/`, for benchmarking, never on a security path (ADR-006). It must never be imported by any `crates/` library or by mw-agent, mw-ca, mw-control, or mw-cli.
+- No fixed-size crypto arrays in wire types. Never `[u8; 32]` or `[u8; 64]` for keys, signatures, or digests in `mw-proto` or any wire/spec struct. Use `Signature { alg, bytes }` and `Digest { alg, bytes }` — each carries an `AlgId`.
+- Everything signable carries `signatures: Vec<Signature>` (a list, not a scalar): enables dual-sign migration and threshold signing.
+- `mw-crypto` is a dependency sink — it must not depend on any other `mw-*` crate.
+- Algorithm capability is bound to attested identity and signed, never asserted in the handshake (ADR-008). Do not add plaintext capability fields to handshake hellos.
+- The negotiated `AlgSuite` must be bound into the handshake transcript (downgrade protection).
+
+If a change appears to require crypto outside `mw-crypto`, stop and flag it rather than routing around the boundary.
