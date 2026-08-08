@@ -1,5 +1,105 @@
 use mw_crypto::ed25519::{Keypair, PublicKey};
-use mw_crypto::{AlgId, Error, Hasher, Signer, Verifier, sha256};
+use mw_crypto::{AlgId, Error, Hasher, Signer, UnknownAlgorithmCode, Verifier, sha256};
+
+/// Independent audit table cross-checking `AlgId::ALL` and compile-time pins.
+const REGISTRY_AUDIT: &[(u16, AlgId)] = &[
+    (0x0001, AlgId::Ed25519),
+    (0x0002, AlgId::X25519),
+    (0x0010, AlgId::Sha256),
+    (0x0011, AlgId::Sha384),
+    (0x0020, AlgId::MlKem768),
+    (0x0030, AlgId::MlDsa87),
+    (0x0031, AlgId::SlhDsa128s),
+];
+
+#[test]
+fn every_registry_code_yields_correct_variant() {
+    for &(code, expected) in REGISTRY_AUDIT {
+        assert_eq!(AlgId::from_u16(code), Ok(expected));
+    }
+}
+
+#[test]
+fn every_variant_yields_correct_code() {
+    for &alg in AlgId::ALL {
+        let expected_code = REGISTRY_AUDIT
+            .iter()
+            .find(|&&(_, v)| v == alg)
+            .map(|&(c, _)| c)
+            .expect("audit table must cover every variant in ALL");
+        assert_eq!(alg.as_u16(), expected_code);
+    }
+}
+
+#[test]
+fn alg_from_u16_round_trips_every_registry_variant() {
+    for &alg in AlgId::ALL {
+        let code = alg.as_u16();
+        assert_eq!(AlgId::from_u16(code), Ok(alg));
+    }
+    for &(code, _) in REGISTRY_AUDIT {
+        let decoded = AlgId::from_u16(code).expect("audit code must decode");
+        assert_eq!(decoded.as_u16(), code);
+    }
+}
+
+#[test]
+fn explicit_discriminant_agrees_with_as_u16() {
+    for &alg in AlgId::ALL {
+        assert_eq!(alg as u16, alg.as_u16());
+    }
+}
+
+#[test]
+fn all_contains_no_duplicate_variants() {
+    for (i, &a) in AlgId::ALL.iter().enumerate() {
+        for &b in &AlgId::ALL[i + 1..] {
+            assert_ne!(a, b, "duplicate variant in ALL");
+        }
+    }
+}
+
+#[test]
+fn all_contains_no_duplicate_codes() {
+    for (i, &a) in AlgId::ALL.iter().enumerate() {
+        for &b in &AlgId::ALL[i + 1..] {
+            assert_ne!(a.as_u16(), b.as_u16(), "duplicate code in ALL");
+        }
+    }
+}
+
+#[test]
+fn all_length_matches_registry() {
+    assert_eq!(AlgId::ALL.len(), 7);
+}
+
+#[test]
+fn alg_from_u16_rejects_unknown_code() {
+    for code in [0x0000, 0x0003, 0x00FF, 0xFFFF] {
+        assert_eq!(AlgId::from_u16(code), Err(UnknownAlgorithmCode { code }));
+    }
+}
+
+#[test]
+fn trait_impls_agree_with_methods() {
+    for &alg in AlgId::ALL {
+        assert_eq!(u16::from(alg), alg.as_u16());
+    }
+    for &(code, expected) in REGISTRY_AUDIT {
+        assert_eq!(AlgId::try_from(code), Ok(expected));
+        assert_eq!(AlgId::try_from(code), AlgId::from_u16(code));
+    }
+    for code in [0x0000, 0x00FF] {
+        assert_eq!(AlgId::try_from(code), AlgId::from_u16(code));
+    }
+}
+
+#[test]
+fn unknown_algorithm_code_implements_error_traits() {
+    let err = UnknownAlgorithmCode { code: 0x00FF };
+    assert!(format!("{err}").contains("00ff") || format!("{err}").contains("0x00ff"));
+    let _: &dyn std::error::Error = &err;
+}
 
 #[test]
 fn sign_verify_round_trip() {
@@ -13,7 +113,9 @@ fn sign_verify_round_trip() {
 #[test]
 fn tampered_message_fails() {
     let keypair = Keypair::generate();
-    let sig = keypair.sign(b"original message").expect("signing must succeed");
+    let sig = keypair
+        .sign(b"original message")
+        .expect("signing must succeed");
     let err = keypair
         .verify(b"tampered message", &sig)
         .expect_err("tampered message must not verify");

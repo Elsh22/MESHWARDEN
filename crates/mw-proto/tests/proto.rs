@@ -1,6 +1,6 @@
 use mw_crypto::AlgId;
 use mw_proto::{
-    alg_from_u16, alg_to_u16, Error, Frame, Hello, MessageType, WireVersion, MAX_PAYLOAD_LEN,
+    Error, Frame, Hello, MAX_PAYLOAD_LEN, MessageType, WireVersion, alg_from_u16, alg_to_u16,
 };
 
 const REGISTRY_CODES: &[(u16, AlgId)] = &[
@@ -12,6 +12,21 @@ const REGISTRY_CODES: &[(u16, AlgId)] = &[
     (0x0030, AlgId::MlDsa87),
     (0x0031, AlgId::SlhDsa128s),
 ];
+
+#[test]
+fn registry_codes_agrees_with_alg_id_all() {
+    assert_eq!(REGISTRY_CODES.len(), AlgId::ALL.len());
+    for &(code, variant) in REGISTRY_CODES {
+        assert_eq!(variant.as_u16(), code);
+    }
+    for &variant in AlgId::ALL {
+        let matches = REGISTRY_CODES
+            .iter()
+            .filter(|&&(_, v)| v == variant)
+            .count();
+        assert_eq!(matches, 1, "variant {variant:?} must appear exactly once");
+    }
+}
 
 #[test]
 fn alg_from_u16_round_trips_every_registry_code() {
@@ -80,7 +95,9 @@ fn encode_rejects_unsupported_wire_version() {
         message_type: MessageType::Hello.as_u16(),
         payload: b"x".to_vec(),
     };
-    let err = frame.encode().expect_err("unsupported major must fail on encode");
+    let err = frame
+        .encode()
+        .expect_err("unsupported major must fail on encode");
     assert_eq!(err, Error::UnsupportedWireVersion(99));
 }
 
@@ -105,7 +122,11 @@ fn oversized_payload_declaration_is_rejected() {
 #[test]
 fn decode_prefix_leaves_trailing_bytes_and_recovers_next_frame() {
     let first = Frame::new(WireVersion::V1, MessageType::Hello, b"first".to_vec());
-    let second = Frame::new(WireVersion::V1, MessageType::Hello, b"second-payload".to_vec());
+    let second = Frame::new(
+        WireVersion::V1,
+        MessageType::Hello,
+        b"second-payload".to_vec(),
+    );
 
     let frame_bytes = first.encode().expect("encode first");
     let mut buf = frame_bytes.clone();
@@ -192,4 +213,13 @@ fn hello_shape_carries_alg_ids() {
     };
     assert_eq!(hello.supported_algs.len(), 2);
     assert_eq!(alg_to_u16(hello.supported_algs[0]), 0x0001);
+}
+
+#[test]
+fn hello_postcard_golden_vector_is_stable() {
+    let hello = Hello {
+        supported_algs: vec![AlgId::Ed25519, AlgId::X25519, AlgId::Sha256],
+    };
+    let bytes = hello.to_bytes().expect("to_bytes must succeed");
+    assert_eq!(bytes, [0x03, 0x01, 0x02, 0x10]);
 }
