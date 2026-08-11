@@ -12,7 +12,7 @@
 | 2 | Post-review redraft: ADR-015 preservation, certificate wire format, negotiation removed, honest `Unauthenticated<S>` characterisation, manifest-level dependency gates |
 | 3 | Maintainer decisions on Q1–Q5 plus eight mandatory corrections: bounded types replacing fixed-size cryptographic arrays, signature lists, `auth_algorithm`, `AuthMachine`/driver split, single pre-authentication buffering rule, bounds-before-allocation obligation, message-code allocation |
 | **4** | **Corrected before first commit; no repository history affected.** (a) Algorithm-allocation wording: `0x0001`–`0x003F` is the current **block layout**, not the allocated set, and `MAX_CERT_CAPABILITIES = 64` is an **independent cardinality bound** with no relationship to the code space. (b) Added *Relationship to `WireVersion.major`*, clarifying the three version axes and deferring wire compatibility to ADR-015. **No normative security decision changed.** |
-| **5** | Six maintainer decisions recorded, 2026-08-10; **corrected before push; no shared history affected.** **Normative content** — Amendment 1: scoped exception to algorithm-registry invariant 3 (capability codes descriptive, raw `u16`; normative home `docs/spec/algorithm-registry.md` §*Scope of invariant 3*); Amendment 4: certificate validation ordering with narrowed diagnostic claim (§*Certificate validation ordering*); Amendment 5: bounded-decode doctrine (§*Bounded-decode doctrine*, RSK-017-14); `AuthOutcome` carries raw capability codes with the same accessor discipline as `NodeCertificate` (§*Division of responsibility*); Hello's advertisement is descriptive under Amendment 1, with current reject-unknown decode recorded as a known inconsistency deferred with the rest of the `hello.rs` debt (§*Revisit triggers*). **Corrections changing no normative decision** — Amendment 2: `MAX_PUBLIC_KEY_BYTES = 256` and bound-constant ownership; Amendment 3: `mw-identity → mw-proto` crate edge; Amendment 6: deferred `Hello.supported_algs` bound (and, as corrected, the descriptive-decode and error-taxonomy items). Follows Revision 4's precedent: corrected before entering shared history. |
+| **5** | Six maintainer decisions recorded, 2026-08-10; **corrected before push; no shared history affected.** **Third and final correction before push.** **Normative content** — Amendment 1: scoped exception to algorithm-registry invariant 3 (capability codes descriptive, raw `u16`; normative home `docs/spec/algorithm-registry.md` §*Scope of invariant 3*); Amendment 4: certificate validation ordering with narrowed diagnostic claim (§*Certificate validation ordering*); Amendment 5: bounded-decode doctrine (§*Bounded-decode doctrine*, RSK-017-14); `AuthOutcome` carries raw capability codes with the same accessor discipline as `NodeCertificate` (§*Division of responsibility*); Hello's advertisement is descriptive under Amendment 1, with current reject-unknown decode recorded as a known inconsistency deferred with the rest of the `hello.rs` debt (§*Revisit triggers*). **Corrections changing no normative decision** — Amendment 2: `MAX_PUBLIC_KEY_BYTES = 256` and bound-constant ownership; Amendment 3: `mw-identity → mw-proto` crate edge; Amendment 6: deferred `Hello.supported_algs` bound (and, as corrected, the descriptive-decode and error-taxonomy items). **Corrections A–C (this correction, third and final before push)** — A: `NodeCertificate.public_key` recorded as pre-existing untagged crypto-bearing legacy with stop condition and well-formedness obligation (§*Legacy: `NodeCertificate.public_key` is untagged*, RSK-017-15); B: testing obligations — removed unimplementable "unknown public-key algorithm code" row; added subject-key well-formedness and `NodeId` textual canonicality rows (§*Testing obligations*); C: `certificate_signing_bytes` as a byte prefix of `certificate_wire_bytes` recorded as an encoding observation, not a contract (§*Certificate representations*). Follows Revision 4's precedent: corrected before entering shared history. |
 
 - **Depends on:** ADR-008 (identity-bound capabilities), ADR-015 (postcard canonical encoding, as amended by Erratum 1), ADR-016 (pure-Rust rustls provider)
 - **Builds on:** commit `b1911bd` (certificate self-consistency)
@@ -143,6 +143,14 @@ vectors must continue to pass unchanged.**
 **`mw-proto` carries certificate bytes opaquely** as a bounded byte vector. It does not parse
 them and does not depend on `mw-identity`.
 
+**Prefix relationship is an observation, not a contract.** With the current field order and
+bounded-type encodings, `certificate_signing_bytes` happens to be a **byte prefix** of
+`certificate_wire_bytes`. That is an observation about the current encoding, not a contract.
+No code may rely on it. In particular, verification must **reconstruct** the signing form
+from decoded fields and must never obtain it by slicing a prefix of received bytes. This
+relationship is deliberately **not pinned by a test**: a test would convert an encoding
+coincidence into a contract and would fail on a future field addition for no security reason.
+
 ### Normative parsing rules
 
 1. **Strict decode** — reject trailing bytes.
@@ -187,9 +195,11 @@ regardless of expiry. (Subject and issuer mismatch precede signature verificatio
 listed `verify` order, so a forged certificate whose issuer name was also altered reports
 `IssuerKeyMismatch`, not `BadSignature` — the ordering is intentional.)
 
-- `sign`: capability count → subject/key consistency → validity-window check → sign.
-- `verify`: capability count → subject mismatch → issuer mismatch → signature →
-  validity-window re-check → not-yet-valid → expired.
+- `sign`: capability count → subject key well-formedness → subject/key consistency →
+  validity-window check → sign. *(Subject key well-formedness: §*Legacy:
+  `NodeCertificate.public_key` is untagged*.)*
+- `verify`: capability count → subject key well-formedness → subject mismatch → issuer
+  mismatch → signature → validity-window re-check → not-yet-valid → expired.
 
 Additional rulings:
 
@@ -228,6 +238,33 @@ to be revisited during the broader crypto-agility migration.
 **Stop condition:** if the crypto rule is interpreted as requiring immediate certificate
 migration, that is a **separate coupled decision** requiring its own ADR. Implementation must
 stop and flag it rather than silently expanding scope.
+
+### Legacy: `NodeCertificate.public_key` is untagged
+
+`.cursor/rules/crypto-boundary.mdc` requires crypto-bearing fields to carry an `AlgId` tag
+(`Signature { alg, bytes }`, `Digest { alg, bytes }`, and the acted-upon side of Amendment 1
+for signature algorithm codes on the wire). `NodeCertificate.public_key` is a bare byte
+string: it carries **no algorithm tag** in the signing canonical form and none in the
+complete wire representation.
+
+**This predates the tagging rule and is not migrated by this ADR.** Migration would add a
+field to the signing canonical form, change the canonical bytes, and invalidate existing
+golden vectors — explicitly out of scope here.
+
+**In v1, the subject key's algorithm is implicitly Ed25519**, because Ed25519 is the only
+implemented signature algorithm. This is an assumption, not a wire fact.
+
+**Stop condition:** if the tagging rule is read as requiring a `public_key_algorithm` field,
+that is a **separate coupled decision requiring its own ADR**. An implementation slice must
+stop and flag it, and must **never** invent the field — in particular, never add it to the
+wire form only, where it would sit outside the signature and be attacker-mutable.
+
+**Consequence:** because the subject key is only hashed to derive the `NodeId`, a certificate
+whose `public_key` is not a valid Ed25519 point can be fully self-consistent and validly
+signed. It fails closed later, at whatever layer first tries to use it as a key, producing a
+misleading error at the wrong layer. Therefore `sign` and `verify` validate the subject key's
+well-formedness as Ed25519 under the v1 implicit assumption above (see also §*Certificate
+validation ordering*).
 
 ### ADR-015 reconciliation
 
@@ -946,6 +983,7 @@ carries no version.
 | RSK-017-12 | `NodeCertificate.signature` scalar is inconsistent with the signature-list rule | Accepted as pre-existing legacy. Revisit during crypto-agility migration. |
 | RSK-017-13 | `MAX_CERTIFICATE_WIRE_BYTES = 2048` is provisional | Accepted. Implementation must stop and report measured evidence if insufficient. |
 | RSK-017-14 | The bounded-decode violation channel is a thread-local: holding it across an `.await` would misattribute violations across tasks, and it makes the bounded-decode module `std`-only | Accepted. `decode_exact` is synchronous today; the never-across-`.await` rule is normative (Rev 5, §*Bounded-decode doctrine*) and binds the driver slice. `std`-only is a recorded constraint, revisited only if `no_std` is ever required. |
+| RSK-017-15 | `NodeCertificate.public_key` is an untagged crypto-bearing field; its algorithm is an implicit v1 Ed25519 assumption, not a wire fact | Accepted as pre-existing legacy (§*Legacy: `NodeCertificate.public_key` is untagged*). Mitigated in v1 by well-formedness checks in `sign` and `verify`. Adding a `public_key_algorithm` field is a separate coupled decision requiring its own ADR; never invent it on the wire alone. |
 
 ---
 
@@ -1006,6 +1044,12 @@ Changing any of these invalidates this ADR:
 
 ## Testing obligations
 
+**Fixture note (signing golden vector).** The signing golden vector's synthetic keys
+`[0x11; 32]` and `[0x22; 32]` are **both valid Ed25519 points**, which is why
+well-formedness validation can be added to `sign` without changing the golden vector.
+This is a property of those specific fixture bytes; changing them requires re-checking
+validity as Ed25519 public keys.
+
 **Positive**
 
 - Mutual authentication succeeds over `tokio::io::duplex`; both endpoints reach
@@ -1041,7 +1085,9 @@ Changing any of these invalidates this ADR:
 | Duplicate algorithm codes | `ProtocolViolation` |
 | Unknown algorithm code | `UnsupportedAlgorithm` |
 | Unknown **signature** algorithm code | `UnsupportedAlgorithm` — acted-upon side of Amendment 1 |
-| Unknown **public-key** algorithm code | `UnsupportedAlgorithm` — acted-upon side of Amendment 1 |
+| Certificate whose `public_key` is not a well-formed Ed25519 point | rejected by both `sign` and `verify`, with a typed error (Rev 5, §*Legacy: `NodeCertificate.public_key` is untagged*) |
+| `NodeId` canonical textual form: 26-character Base32 with non-zero trailing bits | rejected — load-bearing for `AuthTranscriptV1`'s 34-byte node-id fields |
+| `NodeId` canonical textual form: lowercase input | rejected — same canonicality obligation |
 | Resolved-subset accessor omits an unknown capability code while the raw accessor includes it | pins documented lossiness (Rev 5) |
 | Signature algorithm ≠ `auth_algorithm` | `UnsupportedAlgorithm` |
 | Signature algorithm ≠ certificate key algorithm | `UnsupportedAlgorithm` |
