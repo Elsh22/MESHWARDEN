@@ -53,6 +53,12 @@ thread_local! {
     /// Private to this module; accessed only through [`ViolationScope`] and
     /// [`record_violation`]. Not part of the public API.
     static VIOLATION: Cell<Option<Violation>> = const { Cell::new(None) };
+
+    /// Nesting depth of active [`ViolationScope`] guards on this thread.
+    ///
+    /// `const`-initialized for the same reason as [`VIOLATION`]: a lazily
+    /// initialized thread-local can allocate on first access.
+    static SCOPE_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Records a bound violation raised inside a deserialization visitor.
@@ -69,27 +75,50 @@ fn record_violation(declared: usize, max: usize) {
 
 /// Guard scoping the violation channel to one decode attempt.
 ///
-/// Clears the channel on entry — so a violation left by a previous failed
-/// decode can never be attributed to a later one — and again on drop, so no
-/// residue outlives the decode that produced it.
+/// Depth-aware: only the outermost scope clears the channel (on entry and on
+/// drop). Inner scopes neither clear nor reset it, so a violation recorded at
+/// any nesting depth survives until the outermost scope reads it. Nested
+/// [`take`](Self::take) peeks without consuming; only the outermost reader
+/// clears the slot.
 struct ViolationScope {
     _private: (),
 }
 
 impl ViolationScope {
     fn enter() -> Self {
-        VIOLATION.with(|slot| slot.set(None));
+        SCOPE_DEPTH.with(|depth| {
+            let next = depth.get().saturating_add(1);
+            depth.set(next);
+            if next == 1 {
+                VIOLATION.with(|slot| slot.set(None));
+            }
+        });
         Self { _private: () }
     }
 
     fn take(&self) -> Option<Violation> {
-        VIOLATION.with(Cell::take)
+        SCOPE_DEPTH.with(|depth| {
+            VIOLATION.with(|slot| {
+                if depth.get() <= 1 {
+                    slot.take()
+                } else {
+                    // Nested reader: leave the slot for the outermost scope.
+                    slot.get()
+                }
+            })
+        })
     }
 }
 
 impl Drop for ViolationScope {
     fn drop(&mut self) {
-        VIOLATION.with(|slot| slot.set(None));
+        SCOPE_DEPTH.with(|depth| {
+            let next = depth.get().saturating_sub(1);
+            depth.set(next);
+            if next == 0 {
+                VIOLATION.with(|slot| slot.set(None));
+            }
+        });
     }
 }
 
@@ -359,9 +388,26 @@ impl<'de, const N: usize> Deserialize<'de> for BoundedBytes<N> {
 ///
 /// Same construction discipline as [`BoundedBytes`]: every path validates
 /// against `N`; no unchecked path, no `Deref`, no `AsRef`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` prints the length and bound, never the elements. Elements are one
+/// [`as_slice`](Self::as_slice) call away for legitimate debugging, so hiding
+/// costs nothing, while a logged element list cannot be retracted. Today's
+/// element types are public data (`u16` capability codes) and nested
+/// secret-bearing types carry their own hiding `Debug`, but the policy should
+/// not depend on that continuing to be true.
+#[derive(Clone, PartialEq, Eq)]
 pub struct BoundedVec<T, const N: usize> {
     items: Vec<T>,
+}
+
+impl<T, const N: usize> fmt::Debug for BoundedVec<T, N> {
+    /// Length only — never the elements (log-hygiene, matching [`BoundedBytes`]).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BoundedVec")
+            .field("len", &self.items.len())
+            .field("max", &N)
+            .finish()
+    }
 }
 
 impl<T, const N: usize> BoundedVec<T, N> {

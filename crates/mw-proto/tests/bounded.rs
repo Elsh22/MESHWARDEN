@@ -12,12 +12,60 @@
 //! borrowed slice — no allocation), surfacing as generic `MalformedWire`
 //! (§4 item 5 fallback, allocation safety unconditional).
 
+use std::fmt;
+
 use mw_proto::{BoundedBytes, BoundedVec, Error, Hello, decode_exact};
+use serde::Deserialize;
+use serde::de::Visitor;
 
 type Bytes8 = BoundedBytes<8>;
 type Bytes4 = BoundedBytes<4>;
 type Vec8 = BoundedVec<u16, 8>;
 type Nested = BoundedVec<BoundedBytes<4>, 8>;
+
+/// Test-local wrapper whose `Deserialize` calls [`decode_exact`] on the
+/// borrowed byte payload — a genuine nested decode scope.
+#[derive(Debug)]
+struct NestedExactDecode;
+
+impl<'de> Deserialize<'de> for NestedExactDecode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct BytesVis;
+
+        impl<'de> Visitor<'de> for BytesVis {
+            type Value = NestedExactDecode;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "bytes whose payload is decoded via nested decode_exact")
+            }
+
+            fn visit_borrowed_bytes<E>(self, v: &'de [u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match decode_exact::<Bytes4>(v) {
+                    Ok(_) => Ok(NestedExactDecode),
+                    Err(_) => Err(E::custom("nested decode_exact failed")),
+                }
+            }
+
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match decode_exact::<Bytes4>(v) {
+                    Ok(_) => Ok(NestedExactDecode),
+                    Err(_) => Err(E::custom("nested decode_exact failed")),
+                }
+            }
+        }
+
+        deserializer.deserialize_bytes(BytesVis)
+    }
+}
 
 /// Postcard varint encoding of `u64::MAX` (10 bytes) — a declared
 /// length/count near `usize::MAX` on 64-bit targets.
@@ -392,6 +440,36 @@ fn nested_decode_reports_innermost_violation() {
     );
 }
 
+/// Pins depth-aware violation-channel ownership across nested `decode_exact`
+/// calls: a bound violation raised in an inner decode must surface as
+/// `BoundExceeded` from the outer decode (not be downgraded to
+/// `MalformedWire` by an inner scope clearing the channel), and the channel
+/// must still be cleared once the outermost scope exits.
+#[test]
+fn nested_decode_exact_preserves_inner_bound_exceeded() {
+    // Inner payload: BoundedBytes<4> declaring length 5 (genuine BoundExceeded).
+    let inner: [u8; 6] = [0x05, 1, 2, 3, 4, 5];
+    // Outer wire: that inner payload as a postcard byte string.
+    let input = postcard::to_allocvec(&inner.as_slice()).expect("encode wrapper bytes");
+
+    assert_eq!(
+        decode_exact::<NestedExactDecode>(&input)
+            .expect_err("inner bound violation must surface from outer decode"),
+        Error::BoundExceeded {
+            declared: 5,
+            max: 4
+        }
+    );
+
+    // After the outermost scope exits, a differently-failing decode reports
+    // its own cause — not a stale BoundExceeded.
+    let truncated: [u8; 3] = [0x05, 1, 2];
+    assert_eq!(
+        decode_exact::<Bytes4>(&truncated).expect_err("truncated must fail"),
+        Error::MalformedWire
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Finalization (D4)
 // ---------------------------------------------------------------------------
@@ -491,6 +569,22 @@ fn bounded_bytes_debug_hides_contents() {
     assert!(
         !debug.contains("222"),
         "Debug output leaked contents: {debug}"
+    );
+    assert!(
+        debug.contains("len"),
+        "Debug output should show length: {debug}"
+    );
+}
+
+/// Pins that `BoundedVec`'s `Debug` output never contains element values
+/// (matching `BoundedBytes` length-only hygiene).
+#[test]
+fn bounded_vec_debug_hides_elements() {
+    let vec = Vec8::new(vec![2222, 2222, 2222]).expect("within bound");
+    let debug = format!("{vec:?}");
+    assert!(
+        !debug.contains("2222"),
+        "Debug output leaked elements: {debug}"
     );
     assert!(
         debug.contains("len"),

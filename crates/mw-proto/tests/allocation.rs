@@ -68,6 +68,11 @@ thread_local! {
 /// panics, even during thread teardown), and does nothing else.
 struct CountingAlloc;
 
+// `realloc` and `alloc_zeroed` are deliberately not overridden. `GlobalAlloc`'s
+// default `realloc` routes through `self.alloc` / `self.dealloc`, and default
+// `alloc_zeroed` routes through `self.alloc`, so reallocation-driven growth is
+// counted. Forwarding either to `System` directly would bypass the counters
+// and blind every allocation assertion in this file silently.
 unsafe impl GlobalAlloc for CountingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract; the
@@ -171,6 +176,41 @@ fn harness_self_test_observes_deliberate_large_allocation() {
         "harness failed to observe a deliberate 4 MiB allocation: peak {peak} bytes"
     );
     assert!(peak > ADVERSARIAL_PEAK_LIMIT);
+}
+
+/// Guard: growth via `Vec` reallocation must be visible to the harness.
+///
+/// The counting allocator overrides only `alloc`/`dealloc` and relies on
+/// `GlobalAlloc`'s default `realloc` forwarding through those methods. If
+/// `realloc` is ever overridden or forwarded to `System` directly, this test
+/// stops observing growth and every allocation assertion in this file has
+/// become unreliable.
+#[test]
+fn harness_self_test_observes_realloc_growth() {
+    const FINAL_LEN: usize = 64 * 1024;
+    let (len, peak) = peak_alloc_of(|| {
+        let mut v = Vec::<u8>::new();
+        for i in 0..FINAL_LEN {
+            v.push(i as u8);
+        }
+        let len = v.len();
+        std::hint::black_box(v);
+        len
+    });
+    assert_eq!(len, FINAL_LEN);
+    assert!(
+        peak > 0,
+        "harness observed no allocation during realloc growth: peak {peak} bytes; \
+         realloc may have been overridden or forwarded — every allocation \
+         assertion in this file is then unreliable"
+    );
+    // Roughly proportional to final size: allow amortized growth overhead,
+    // but require the high-water mark to clear a substantial fraction of
+    // the final buffer (well above any incidental decode churn).
+    assert!(
+        peak >= FINAL_LEN / 2,
+        "harness peak {peak} not roughly proportional to final Vec size {FINAL_LEN}"
+    );
 }
 
 /// Negative control: the same moderate adversarial input decoded as a plain
