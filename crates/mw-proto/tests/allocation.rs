@@ -24,6 +24,26 @@
 //! own thread matters. The thread-locals are `const`-initialized so that
 //! first access inside `alloc` cannot itself allocate (a lazily-initialized
 //! thread-local can, which would recurse through the allocator).
+//!
+//! # Discrimination arithmetic (serde 1.0.229)
+//!
+//! Every adversarial case must be able to *detect* the failure it targets:
+//! a naive implementation that preallocates from the declared count must
+//! exceed the threshold. The naive path is `serde`'s built-in `Vec` visitor,
+//! whose preallocation on the resolved **serde 1.0.229** is
+//! (`src/core/private/size_hint.rs`):
+//!
+//! ```text
+//! cautious::<Element>(hint) = min(hint, 1_048_576 / size_of::<Element>())   [elements]
+//! naive_bytes               = cautious * size_of::<Element>()
+//! ```
+//!
+//! Each case's comment records `declared_count`, `naive_bytes`, the
+//! threshold, and the margin, and requires `naive_bytes >= 2 * threshold`.
+//! **This cap has changed shape across serde versions** — a serde upgrade
+//! may invalidate every margin in this file; re-derive them when bumping.
+//! The negative-control test demonstrates (rather than argues) that the
+//! harness plus the chosen counts detect the naive path.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -115,10 +135,25 @@ type Nested = BoundedVec<BoundedBytes<4>, 8>;
 
 /// Postcard varint encoding of `u64::MAX` (10 bytes) — a declared
 /// length/count near `usize::MAX` on 64-bit targets.
+///
+/// Not test-verified by encoding a real value of that size (infeasible).
+/// Derived as postcard's unsigned-varint form of `u64::MAX`: nine continuation
+/// bytes `0xFF` followed by a terminating `0x01`. Confirmed by decoding the
+/// fixture's declared count in the cases that assert
+/// `BoundExceeded { declared: u64::MAX as usize, .. }`.
 const ENORMOUS_VARINT: [u8; 10] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01];
 
+/// Declared count for the moderate-over case and the negative control.
+/// Chosen so `naive_bytes = 4096 * size_of::<u16>() = 8192` clears the
+/// 4 KiB threshold with a 2× margin (serde 1.0.229 `cautious`).
+const MODERATE_DECLARED_COUNT: usize = 4096;
+
+/// Postcard varint prefix of [`MODERATE_DECLARED_COUNT`], verified by
+/// [`fixture_varint_prefixes_declare_the_intended_counts`].
+const MODERATE_COUNT_VARINT: [u8; 2] = [0x80, 0x20];
+
 // ---------------------------------------------------------------------------
-// Harness self-test
+// Harness self-test, negative control, fixture verification
 // ---------------------------------------------------------------------------
 
 /// A deliberate 4 MiB allocation inside the scope must be observed to exceed
@@ -138,11 +173,79 @@ fn harness_self_test_observes_deliberate_large_allocation() {
     assert!(peak > ADVERSARIAL_PEAK_LIMIT);
 }
 
+/// Negative control: the same moderate adversarial input decoded as a plain
+/// `Vec<u16>` (hint-preallocating) through the same `decode_exact` wrapper
+/// and the same harness **must** exceed the threshold.
+///
+/// This proves the harness plus the chosen count actually detect the naive
+/// path. If this test ever starts passing under the threshold, either the
+/// harness stopped measuring or serde's `cautious` cap changed — in both
+/// cases every other assertion in this file has quietly become vacuous.
+#[test]
+fn negative_control_plain_vec_exceeds_threshold_on_same_input() {
+    // Same declared count and prefix as case 2 / Hello moderate path.
+    let mut input = MODERATE_COUNT_VARINT.to_vec();
+    input.push(0x00);
+    let (result, peak) = peak_alloc_of(|| decode_exact::<Vec<u16>>(&input));
+    // Decode fails (declared count exceeds remaining bytes), but not before
+    // the naive visitor preallocates from the hint.
+    assert!(result.is_err(), "truncated enormous declaration must fail");
+    assert!(
+        peak > ADVERSARIAL_PEAK_LIMIT,
+        "negative control failed to observe naive preallocation: peak {peak} bytes \
+         (threshold {ADVERSARIAL_PEAK_LIMIT}); harness or serde cautious cap may \
+         have changed — every other assertion in this file is then vacuous"
+    );
+    // Also pin that the observed peak is at least the computed naive_bytes.
+    let naive_bytes = MODERATE_DECLARED_COUNT * std::mem::size_of::<u16>();
+    assert!(
+        peak >= naive_bytes,
+        "peak {peak} below expected naive_bytes {naive_bytes}"
+    );
+}
+
+/// Verify that every hand-computed varint fixture prefix declares the count
+/// it claims, by encoding a real value of that length and comparing prefixes.
+///
+/// A wrong prefix would declare a different count than intended and the
+/// allocation tests could still pass for the wrong reason.
+#[test]
+fn fixture_varint_prefixes_declare_the_intended_counts() {
+    // Moderate declared count 4096.
+    let encoded = postcard::to_allocvec(&vec![0u16; MODERATE_DECLARED_COUNT]).expect("encodes");
+    assert_eq!(
+        &encoded[..MODERATE_COUNT_VARINT.len()],
+        &MODERATE_COUNT_VARINT,
+        "MODERATE_COUNT_VARINT must be the postcard prefix of a {MODERATE_DECLARED_COUNT}-element Vec<u16>"
+    );
+
+    // Outer-count-1 prefix used by the nested-inner case.
+    let one = postcard::to_allocvec(&vec![0u16; 1]).expect("encodes");
+    assert_eq!(&one[..1], &[0x01], "outer count 1 must encode as 0x01");
+
+    // Discrimination arithmetic for nested outer depends on the element size.
+    // BoundedBytes<N> is a single Vec<u8> (no extra fields); pin that.
+    assert_eq!(
+        std::mem::size_of::<BoundedBytes<4>>(),
+        std::mem::size_of::<Vec<u8>>(),
+        "nested-outer naive_bytes arithmetic assumes BoundedBytes<4> == Vec<u8>"
+    );
+    assert_eq!(
+        std::mem::size_of::<BoundedBytes<4>>(),
+        24,
+        "nested-outer margin comment assumes 24-byte BoundedBytes on this target"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Adversarial cases — assert both the error and the peak allocation
 // ---------------------------------------------------------------------------
 
 /// Case 1 — `BoundedVec`, tiny input declaring a count near `u64::MAX`.
+///
+/// Discrimination: declared `u64::MAX`, element `u16` (2 bytes) →
+/// `naive_bytes = min(u64::MAX, 1_048_576 / 2) * 2 = 1_048_576` vs
+/// threshold 4_096 → margin 256x.
 #[test]
 fn bounded_vec_enormous_declared_count_allocates_nothing_large() {
     let mut input = ENORMOUS_VARINT.to_vec();
@@ -163,15 +266,24 @@ fn bounded_vec_enormous_declared_count_allocates_nothing_large() {
 
 /// Case 2 — `BoundedVec`, tiny input declaring a count comfortably above
 /// `N` (8) but far below `u64::MAX`.
+///
+/// Discrimination: declared 4_096, element `u16` (2 bytes) →
+/// `naive_bytes = min(4_096, 524_288) * 2 = 8_192` vs threshold 4_096 →
+/// margin 2x. The previous count here was 1_000, whose `naive_bytes` of
+/// 2_000 sat *under* the threshold, so a hint-preallocating implementation
+/// would have passed — the count was raised (never the threshold) to make
+/// the case discriminate.
 #[test]
 fn bounded_vec_moderate_over_declared_count_allocates_nothing_large() {
-    // Declared count 1000 as a postcard varint, one stray byte of "input".
-    let input = [0xE8u8, 0x07, 0x00];
+    // Declared count 4096 as a postcard varint (prefix verified by
+    // `fixture_varint_prefixes_declare_the_intended_counts`), one stray byte.
+    let mut input = MODERATE_COUNT_VARINT.to_vec();
+    input.push(0x00);
     let (result, peak) = peak_alloc_of(|| decode_exact::<Vec8>(&input));
     assert_eq!(
-        result.expect_err("count 1000 must fail"),
+        result.expect_err("count 4096 must fail"),
         Error::BoundExceeded {
-            declared: 1000,
+            declared: MODERATE_DECLARED_COUNT,
             max: 8
         }
     );
@@ -182,6 +294,10 @@ fn bounded_vec_moderate_over_declared_count_allocates_nothing_large() {
 }
 
 /// Case 3 — `BoundedBytes`, tiny input declaring an enormous byte length.
+///
+/// Discrimination: declared `u64::MAX`, naive counterpart `Vec<u8>`
+/// (element 1 byte) → `naive_bytes = min(u64::MAX, 1_048_576) * 1 =
+/// 1_048_576` vs threshold 4_096 → margin 256x.
 #[test]
 fn bounded_bytes_enormous_declared_len_allocates_nothing_large() {
     let mut input = ENORMOUS_VARINT.to_vec();
@@ -199,6 +315,12 @@ fn bounded_bytes_enormous_declared_len_allocates_nothing_large() {
 
 /// Case 4 — nested `BoundedVec<BoundedBytes<4>, 8>`, enormous **outer**
 /// declaration.
+///
+/// Discrimination: declared `u64::MAX`, element `BoundedBytes<4>` (one
+/// `Vec<u8>`, 24 bytes on 64-bit; size pinned by
+/// `fixture_varint_prefixes_declare_the_intended_counts`) →
+/// `naive_bytes = min(u64::MAX, 1_048_576 / 24) * 24 = 43_690 * 24 =
+/// 1_048_560` vs threshold 4_096 → margin 255x.
 #[test]
 fn nested_enormous_outer_declaration_allocates_nothing_large() {
     let mut input = ENORMOUS_VARINT.to_vec();
@@ -219,6 +341,11 @@ fn nested_enormous_outer_declaration_allocates_nothing_large() {
 
 /// Case 5 — nested `BoundedVec<BoundedBytes<4>, 8>`, enormous **inner**
 /// declaration.
+///
+/// Discrimination: the inner declaration is the attack, so the naive
+/// counterpart is the inner field as `Vec<u8>` (element 1 byte): declared
+/// `u64::MAX` → `naive_bytes = min(u64::MAX, 1_048_576) * 1 = 1_048_576`
+/// vs threshold 4_096 → margin 256x.
 #[test]
 fn nested_enormous_inner_declaration_allocates_nothing_large() {
     // Outer count 1 (within bound), inner byte length u64::MAX, 1 stray byte.
@@ -289,6 +416,13 @@ fn valid_at_bound_decodes_show_proportional_allocation() {
 /// visitor, removing the incidental clamp postcard's `Slice` flavor
 /// provided). After the rework, growth comes only from bytes actually
 /// present.
+///
+/// Discrimination: declared `u64::MAX`, element `u16` (2 bytes) →
+/// `naive_bytes = min(u64::MAX, 524_288) * 2 = 1_048_576` vs threshold
+/// 4_096 → margin 256x. This count was **never under-powered** (unlike the
+/// previous moderate BoundedVec count of 1_000). Re-measured after the
+/// discrimination fix: peak after rework = 8 bytes; peak before rework
+/// (slice 1b report) = 1_048_576 bytes. Meaningful delta unchanged.
 #[test]
 fn hello_enormous_declared_alg_count_allocates_nothing_large() {
     // Declared algorithm count u64::MAX, one valid algorithm code byte.
