@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-07
-- **Revision:** 4
+- **Revision:** 5
 
 ### Revision history
 
@@ -12,6 +12,7 @@
 | 2 | Post-review redraft: ADR-015 preservation, certificate wire format, negotiation removed, honest `Unauthenticated<S>` characterisation, manifest-level dependency gates |
 | 3 | Maintainer decisions on Q1–Q5 plus eight mandatory corrections: bounded types replacing fixed-size cryptographic arrays, signature lists, `auth_algorithm`, `AuthMachine`/driver split, single pre-authentication buffering rule, bounds-before-allocation obligation, message-code allocation |
 | **4** | **Corrected before first commit; no repository history affected.** (a) Algorithm-allocation wording: `0x0001`–`0x003F` is the current **block layout**, not the allocated set, and `MAX_CERT_CAPABILITIES = 64` is an **independent cardinality bound** with no relationship to the code space. (b) Added *Relationship to `WireVersion.major`*, clarifying the three version axes and deferring wire compatibility to ADR-015. **No normative security decision changed.** |
+| **5** | Six maintainer decisions recorded, 2026-08-10. **Normative content changes** — Amendment 1: scoped exception to algorithm-registry invariant 3 (capability codes are descriptive, carried opaquely as raw `u16`; normative home is `docs/spec/algorithm-registry.md` §*Scope of invariant 3*); Amendment 4: certificate validation ordering, lifetime-cap re-enforcement in `verify`, inverted/zero-length window rejection (§*Certificate validation ordering*); Amendment 5: bounded-decode doctrine (§*Bounded-decode doctrine*, RSK-017-14). **Corrections changing no normative decision** — Amendment 2: `MAX_PUBLIC_KEY_BYTES = 256` and bound-constant ownership recorded (§*Bound-constant ownership and sizing*); Amendment 3: `mw-identity → mw-proto` crate edge (§*Crate ownership*); Amendment 6: deferred `Hello.supported_algs` bound recorded as an open item (§*Revisit triggers*). Unlike Revision 4, which was corrected before first commit, **this revision amends a committed ADR; repository history is affected.** |
 
 - **Depends on:** ADR-008 (identity-bound capabilities), ADR-015 (postcard canonical encoding, as amended by Erratum 1), ADR-016 (pure-Rust rustls provider)
 - **Builds on:** commit `b1911bd` (certificate self-consistency)
@@ -168,6 +169,42 @@ them and does not depend on `mw-identity`.
   semantics beyond the resource-bound objective and is out of scope.
 - Canonical bytes for existing valid certificates are unchanged.
 
+### Certificate validation ordering (normative, Rev 5)
+
+**Ordering principle:** *structural and resource bounds → identity consistency →
+cryptographic verification → temporal validity.* Cheapest and least semantic first;
+cryptographic verification comes **before** temporal validity, so a forged-and-expired
+certificate reports forgery rather than expiry.
+
+- `sign`: capability count → subject/key consistency → validity-window check → sign.
+- `verify`: capability count → subject mismatch → issuer mismatch → signature →
+  validity-window re-check → not-yet-valid → expired.
+
+Additional rulings:
+
+- **The lifetime cap is re-enforced in `verify`, not only in `sign`.** ADR-009 enforces it
+  at construction, which was sufficient while `sign` was the only way a certificate could
+  exist. Once certificates arrive from the wire (`from_wire_bytes`), an issuer with a valid
+  key could otherwise mint a certificate outliving the short-lifetime scheme that stands in
+  for revocation. This ruling is **explicitly coupled to RSK-017-4**: the acceptance of
+  no-revocation rests on short lifetimes, and a wire path around the cap would silently void
+  that acceptance.
+- **One enforcement point for wire-arrived certificates: `verify`.** Wire decoding stays
+  concerned with bytes, counts, and canonicality only; it performs no semantic validation.
+  Two enforcement points can drift.
+- **Inverted and zero-length validity windows are rejected** at both `sign` and `verify`,
+  folded into the same check as the lifetime cap.
+- **ADR-009 needs no separate amendment; this ADR-017 revision governs.** ADR-009 predates
+  this repository and exists as a referenced coupled decision (`docs/adr/README.md`), not as
+  a document that can be amended. Its decision — the hours-scale lifetime cap and its
+  Ed25519 coupling — is unchanged; this revision only adds an enforcement point for a wire
+  arrival path ADR-009 never contemplated.
+- The existing `expired_certificate_with_wrong_issuer_reports_issuer_mismatch` test in
+  `crates/mw-identity/tests/identity.rs` carries a comment marking this ordering an **open
+  architectural question**. It is now **decided**: when slice 2 (`mw-identity` certificate
+  wire form) touches that file, the comment is to be promoted from open question to a
+  normative citation of this section. That file is code and is not edited by this revision.
+
 ### Legacy: `NodeCertificate.signature` remains a scalar
 
 `.cursor/rules/crypto-boundary.mdc` requires signature **lists** on **new** signable protocol
@@ -225,6 +262,20 @@ Because `AuthTranscriptV1` covers `certificate_wire_bytes` in full, capabilities
 session automatically. When a second algorithm is implemented, selection derives from the
 certificates already in the transcript — still with no negotiation mechanism. If that proves
 insufficient, the response is `AuthTranscriptV2` plus a `-v2` label, not a v1 amendment.
+
+### Descriptive capability codes (Rev 5)
+
+Algorithm-registry invariant 3 (unknown code → typed rejection) is **scoped to codes that
+are acted upon**. `NodeCertificate.capabilities` is a **descriptive advertisement**: its
+codes are carried opaquely as raw `u16`, and unknown codes are non-fatal and unusable. The
+normative statement — including the preserved security property (*never act on a capability
+you do not understand*, satisfied by construction) and the availability reasoning — lives in
+`docs/spec/algorithm-registry.md` §*Scope of invariant 3: acted-upon versus descriptive
+codes*; this ADR references it rather than restating it.
+
+Every acted-upon code in this ADR — `auth_algorithm`, `WireSignature.algorithm`, a
+certificate key's algorithm — remains subject to invariant 3 unchanged: unknown → typed
+rejection.
 
 ---
 
@@ -458,6 +509,7 @@ Before authentication the peer is unauthenticated. The general 16 MiB frame maxi
 | `MAX_CERTIFICATE_WIRE_BYTES` | **2 048** |
 | `MAX_CERT_CAPABILITIES` | **64** |
 | `MAX_SIGNATURE_BYTES` | **128** |
+| `MAX_PUBLIC_KEY_BYTES` | **256** (coarse anti-DoS resource bound; **not** a correctness check — Rev 5) |
 | `MAX_PROOF_SIGNATURES` | **4** (decode bound; v1 requires exactly 1) |
 | `MAX_AUTH_INIT_BYTES` | **4 096** |
 | `MAX_AUTH_RESPONSE_BYTES` | **4 096** |
@@ -479,6 +531,26 @@ Before authentication the peer is unauthenticated. The general 16 MiB frame maxi
 certificate with up to 64 capabilities, implementation must **stop and report measured
 evidence** rather than silently raising the bound.
 
+### Bound-constant ownership and sizing (Rev 5)
+
+Recorded by maintainer decision; corrections that change no normative security decision.
+
+- `MAX_PUBLIC_KEY_BYTES = 256` is a **coarse anti-DoS resource bound**, explicitly **not** a
+  correctness check.
+- `MAX_SIGNATURE_BYTES = 128` applies to **certificate signature bytes as well as proof
+  signatures** — one constant, one meaning.
+- All four bound constants defined so far (`MAX_CERTIFICATE_WIRE_BYTES`,
+  `MAX_CERT_CAPABILITIES`, `MAX_SIGNATURE_BYTES`, `MAX_PUBLIC_KEY_BYTES`) are **owned by
+  `mw-proto`** (`crates/mw-proto/src/bounds.rs`), alongside `BoundedBytes` / `BoundedVec`.
+- Honest sizing rationale: nothing in the current registry needs more than 32 bytes of
+  public key or 64 of signature; every post-quantum candidate exceeds the 2 048-byte
+  certificate bound anyway, so a PQC migration bumps this entire constant family together
+  with the transcript and exporter-label version. These bounds are v1-scoped and reject
+  absurd declarations cheaply — nothing more.
+- The substantive control is **per-algorithm exact-length validation**, performed by
+  reconstructing through the existing validating constructors in `mw-crypto` (e.g.
+  `PublicKey::from_bytes`), never by a second length-check implementation.
+
 ### Bounds-before-allocation obligation (normative)
 
 Asserting that `BoundedBytes<N>` "rejects before allocation" is insufficient. The
@@ -497,6 +569,29 @@ implementation **must** satisfy all of:
    to preallocate from the malicious declared length.
 6. The pre-authentication framing layer applies its reduced maximum frame size against the
    length prefix **before** any postcard decode.
+
+### Bounded-decode doctrine (normative, Rev 5)
+
+- The bounded types deserialize through a flavor wrapper whose `size_hint()` is **opaque**.
+  This is deliberate: it is what allows a declared count to be rejected before any element
+  is decoded.
+- **Consequence, normative:** the opaque wrapper also removes the incidental clamp
+  postcard's `Slice` flavor provided, so the declared count is visible to **every** visitor
+  in the decode. Any type decoded through `decode_exact` must therefore contain **no field
+  whose `Deserialize` preallocates from a size hint** — no plain `Vec<T>`, `String`, or map
+  field. Bounded types or push-loop visitors only. This applies to every message and
+  transcript structure in later slices.
+- Bound violations are surfaced through a **module-private thread-local violation channel**,
+  because postcard's error type discards custom serde error messages
+  (`fn custom<T>(_msg: T) -> Self { Error::SerdeDeCustom }` on the pinned postcard
+  **1.1.3**).
+- **The violation channel must never be held across an `.await`.** `decode_exact` is
+  synchronous and contains no await points, so this holds today by construction; a future
+  caller that wrapped a decode in an async fn and yielded mid-decode could misattribute a
+  violation across tasks. This rule binds the driver slice.
+- The channel makes the bounded-decode module **`std`-only**. ADR-015 notes postcard's
+  `no_std`/`alloc` fit; if `mw-proto` ever needs `no_std`, this mechanism needs revisiting.
+  Recorded as a known constraint, not a problem to solve now. See RSK-017-14.
 
 ---
 
@@ -541,17 +636,23 @@ is revisited **after Slice 5**, when the driver's actual access pattern is prove
 ## Crate ownership
 
 ```
-mw-crypto ───┐
-mw-identity ─┼──→ mw-session ──→ binaries
-mw-proto ────┤
-mw-transport ┘
+mw-crypto ────────────┐
+mw-identity ──────────┼──→ mw-session ──→ binaries
+    │                 │
+    └──→ mw-proto ────┤
+mw-transport ─────────┘
 ```
+
+`mw-identity` depends on `mw-proto` for the bounded types and the bound constants (Rev 5).
+There is no cycle: this ADR permanently forbids `mw-proto → mw-identity` — certificate bytes
+are carried opaquely — and `mw-proto` carries no tokio or rustls, so `mw-identity`'s "must
+not gain tokio or rustls" constraint is unaffected by the new edge.
 
 | Crate | Responsibility | Must not |
 |---|---|---|
 | `mw-transport` | TLS 1.3, `Unauthenticated<S>`, channel-binding export | Declare a direct dependency on `mw-crypto`, `mw-identity`, or `mw-session`; know what a `NodeId` is |
-| `mw-proto` | `AuthInit` / `AuthResponse` / `AuthConfirm`, `WireSignature`, `AuthTranscriptV1`, bounded types, exporter label constant, opaque certificate bytes | Depend on `mw-identity` or `mw-transport`; parse certificates |
-| `mw-identity` | `NodeCertificate` verification; `to_wire_bytes` / `from_wire_bytes`; capability bound | Gain tokio or rustls dependencies |
+| `mw-proto` | `AuthInit` / `AuthResponse` / `AuthConfirm`, `WireSignature`, `AuthTranscriptV1`, bounded types **and the bound constants** (Rev 5), exporter label constant, opaque certificate bytes | Depend on `mw-identity` or `mw-transport`; parse certificates |
+| `mw-identity` | `NodeCertificate` verification; `to_wire_bytes` / `from_wire_bytes`; capability bound; consumes `mw-proto` bounded types and bound constants (Rev 5) | Gain tokio or rustls dependencies |
 | **`mw-session`** *(new)* | `machine` (pure `AuthMachine`) and `driver` (async integration) | Depend on `mw-trust` |
 | `mw-trust` | Consumes a verified `NodeId`; decides authorization | Be depended on by `mw-transport`, `mw-proto`, or `mw-session` |
 
@@ -800,6 +901,7 @@ carries no version.
 | RSK-017-11 | `rustls-rustcrypto` is 0.0.2-alpha and unaudited | Accepted under ADR-016 for PoC only. |
 | RSK-017-12 | `NodeCertificate.signature` scalar is inconsistent with the signature-list rule | Accepted as pre-existing legacy. Revisit during crypto-agility migration. |
 | RSK-017-13 | `MAX_CERTIFICATE_WIRE_BYTES = 2048` is provisional | Accepted. Implementation must stop and report measured evidence if insufficient. |
+| RSK-017-14 | The bounded-decode violation channel is a thread-local: holding it across an `.await` would misattribute violations across tasks, and it makes the bounded-decode module `std`-only | Accepted. `decode_exact` is synchronous today; the never-across-`.await` rule is normative (Rev 5, §*Bounded-decode doctrine*) and binds the driver slice. `std`-only is a recorded constraint, revisited only if `no_std` is ever required. |
 
 ---
 
@@ -841,6 +943,12 @@ Changing any of these invalidates this ADR:
 - Post-quantum signature migration begins → the tagged signature list and versioned
   transcript should absorb it.
 - An audit subsystem exists → add local audit events at the listed failure points.
+- The `mw-proto` authentication-message slice allocates its message bounds → allocate a
+  normative `Hello.supported_algs` maximum at the same time (Rev 5). The field currently has
+  **no normative maximum**; inventing one was **explicitly deferred by maintainer decision**,
+  not overlooked, and its decode path is non-preallocating in the interim (growth comes only
+  from bytes actually present). Allocating the constant is a prerequisite for bounding the
+  field, and the authentication-message slice is the natural moment.
 
 ---
 

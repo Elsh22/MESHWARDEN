@@ -28,6 +28,40 @@ different builds must agree on codes without a coordinator to reconcile them.
 5. **`0x0000` is permanently invalid** and never assigned, so a zeroed field is
    always detectably wrong.
 
+### Scope of invariant 3: acted-upon versus descriptive codes
+
+*Maintainer decision, recorded 2026-08-10; normative. ADR-017 Revision 5,
+Amendment 1 references this section rather than restating it.*
+
+Invariant 3 is correct where a code is **acted upon** and wrong where a code is
+**descriptive**. The scoping:
+
+| Context | Policy | Rationale |
+|---|---|---|
+| An algorithm code that selects a cryptographic operation — e.g. a `Signature`'s algorithm, ADR-017's `auth_algorithm`, a key's algorithm tag | **Must resolve. Unknown → typed rejection** (invariant 3, unchanged). | You cannot verify a signature whose algorithm you cannot identify. Carrying it opaquely means accepting an unverifiable object. |
+| A descriptive advertisement — `NodeCertificate.capabilities` | **Carried opaquely as raw `u16`. Unknown codes are non-fatal and unusable.** | Nothing is acted upon by failing to understand it. The certificate's canonical signing form already carries capabilities as raw `u16` (`CanonicalForm.capabilities: Vec<u16>` in `mw-identity`), so signature verification never requires understanding every code. |
+
+**Security property preserved: never act on a capability you do not understand.**
+Satisfied by construction — an unresolvable code cannot be matched against any
+`AlgId`, so no operation can ever select it. Opaque carriage makes an unknown
+code inert, not trusted.
+
+**Availability reasoning.** Rejecting an entire certificate over one
+unrecognized *descriptive* code is fail-closed for availability while buying no
+security, and it fails precisely in the partition scenario ADR-017's versioning
+discipline exists to survive: a newer node advertising a newly allocated
+algorithm would make its certificate unacceptable to every older partition
+member, turning each new algorithm into a coordinated flag-day across every
+partition.
+
+**Do not over-read this exception.** It is *not* "carry all unknown codes
+opaquely." A code in an acted-upon position — anywhere a signature is verified,
+a key is used, or an operation is selected — must resolve, or the object is
+rejected. A decoder that carried an unknown *signature* algorithm opaquely
+would produce a certificate that decodes cleanly and can never be verified. The
+exception applies to descriptive advertisements only; today
+`NodeCertificate.capabilities` is the only such field.
+
 ## Block layout
 
 | Block         | Class                          |

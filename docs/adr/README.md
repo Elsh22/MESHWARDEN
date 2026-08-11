@@ -4,7 +4,7 @@
 
 - ADR-015: Wire serialization codec is postcard — Accepted, 2026-08-07. Carries Erratum 1 (2026-08-07).
 - ADR-016: rustls CryptoProvider is rustls-rustcrypto (PoC) — Accepted, 2026-08-07.
-- ADR-017: Mesh Identity Authentication and TLS Channel Binding — Accepted, 2026-08-07.
+- ADR-017: Mesh Identity Authentication and TLS Channel Binding — Accepted, 2026-08-07. Revision 5 (2026-08-10).
 
 ## Coupled decisions
 
