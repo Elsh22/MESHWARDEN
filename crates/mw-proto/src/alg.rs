@@ -6,11 +6,11 @@ use crate::{Error, Result};
 
 /// Maps a wire `u16` algorithm code to [`AlgId`].
 ///
-/// These are free functions rather than `TryFrom<u16> for AlgId` /
-/// `From<AlgId> for u16` because Rust's orphan rule forbids implementing a
-/// foreign trait (`TryFrom` / `From`) on a foreign type (`AlgId` lives in
-/// `mw-crypto`). Unknown codes return [`Error::UnknownAlgorithm`] — registry
-/// invariant 3 (reject, never panic).
+/// `TryFrom<u16> for AlgId` and `From<AlgId> for u16` exist in `mw-crypto`
+/// (since commit `b9c8a2b`). These free functions survive as adapters that
+/// map [`mw_crypto::UnknownAlgorithmCode`] into `mw_proto`'s [`Error`]:
+/// unknown codes return [`Error::UnknownAlgorithm`] — registry invariant 3
+/// (reject, never panic).
 pub fn alg_from_u16(code: u16) -> Result<AlgId> {
     AlgId::from_u16(code).map_err(|e| Error::UnknownAlgorithm(e.code))
 }

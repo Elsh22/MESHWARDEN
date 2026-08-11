@@ -1,7 +1,5 @@
 //! Length-delimited frame envelope.
 
-use serde::{Deserialize, Serialize};
-
 use crate::{Error, Result, WireVersion};
 
 /// Maximum accepted payload size (bytes). Larger declarations are rejected
@@ -14,8 +12,13 @@ const HEADER_LEN: usize = 2 + 2 + 4;
 /// Known message-type discriminators (SCREAMING_SNAKE on the wire, PascalCase
 /// in Rust). The frame stores the raw `u16` so unknown types can still be
 /// framed; interpretation is up to the caller.
+///
+/// Deliberately not serde-encodable: the wire form is the `u16` discriminant
+/// written big-endian by [`Frame::encode`]. A serde derive would be an
+/// alternate-encoding channel disagreeing with the wire (postcard would emit
+/// the variant index, not the discriminant).
 #[repr(u16)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MessageType {
     Hello = 0x0001,
 }
@@ -43,7 +46,11 @@ impl MessageType {
 ///
 /// Payload codec is postcard (ADR-015); `payload` remains opaque bytes at the
 /// framing layer. The framing header stays hand-rolled big-endian.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Deliberately not serde-encodable: [`Frame::encode`] / [`Frame::decode`]
+/// are the only wire representation. A serde derive would be an
+/// alternate-encoding channel disagreeing with the hand-rolled header.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
     pub version: WireVersion,
     /// Message-type discriminator (`u16` on the wire).

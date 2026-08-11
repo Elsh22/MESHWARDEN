@@ -3,7 +3,7 @@
 use mw_crypto::AlgId;
 use serde::{Deserialize, Serialize};
 
-use crate::{alg_from_u16, alg_to_u16, Error, Result};
+use crate::{Error, Result, alg_from_u16, alg_to_u16};
 
 /// Negotiation hello: the set of algorithms this node claims to support.
 ///
@@ -16,7 +16,10 @@ use crate::{alg_from_u16, alg_to_u16, Error, Result};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
     /// Supported algorithms. Serialized as registry `u16` wire codes.
-    #[serde(serialize_with = "serialize_algs", deserialize_with = "deserialize_algs")]
+    #[serde(
+        serialize_with = "serialize_algs",
+        deserialize_with = "deserialize_algs"
+    )]
     pub supported_algs: Vec<AlgId>,
 }
 
@@ -27,8 +30,17 @@ impl Hello {
     }
 
     /// Decodes a hello from postcard bytes (ADR-015).
+    ///
+    /// Strict decode (ADR-017 §Normative parsing rules rule 1): trailing
+    /// bytes are rejected as [`Error::TrailingBytes`]. Other decode failures
+    /// keep the historical [`Error::MalformedPayload`] shape; the
+    /// error-taxonomy split (unknown-algorithm vs malformed-payload) is
+    /// deferred to the auth-message slice.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        postcard::from_bytes(bytes).map_err(|_| Error::MalformedPayload)
+        crate::decode_exact(bytes).map_err(|e| match e {
+            Error::TrailingBytes { .. } => e,
+            _ => Error::MalformedPayload,
+        })
     }
 }
 

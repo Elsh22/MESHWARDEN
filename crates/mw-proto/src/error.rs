@@ -23,6 +23,23 @@ pub enum Error {
     /// ADR-015).
     #[error("malformed payload")]
     MalformedPayload,
+
+    /// A declared length or element count exceeded its bound.
+    #[error("bound exceeded: declared {declared} exceeds maximum {max}")]
+    BoundExceeded { declared: usize, max: usize },
+
+    /// Input contained bytes after a complete value (ADR-017 strict decode).
+    #[error("{remaining} trailing byte(s) after a complete value")]
+    TrailingBytes { remaining: usize },
+
+    /// A fixed-length field's length was within bound but not exact.
+    #[error("exact length violation: expected {expected}, got {actual}")]
+    ExactLength { expected: usize, actual: usize },
+
+    /// Input was not well-formed under the payload codec, with no more
+    /// specific cause available.
+    #[error("malformed wire input")]
+    MalformedWire,
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
