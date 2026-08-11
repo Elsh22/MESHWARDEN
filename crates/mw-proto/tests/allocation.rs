@@ -38,8 +38,10 @@
 //! naive_bytes               = cautious * size_of::<Element>()
 //! ```
 //!
-//! Each case's comment records `declared_count`, `naive_bytes`, the
-//! threshold, and the margin, and requires `naive_bytes >= 2 * threshold`.
+//! Each adversarial test asserts `naive_bytes >= 2 * ADVERSARIAL_PEAK_LIMIT`
+//! by reading the declared count from the fixture's leading varint (single
+//! source of truth — not a restated constant) and reproducing the formula
+//! above. Case comments still record the arithmetic for human readers.
 //! **This cap has changed shape across serde versions** — a serde upgrade
 //! may invalidate every margin in this file; re-derive them when bumping.
 //! The negative-control test demonstrates (rather than argues) that the
@@ -138,14 +140,14 @@ type Bytes8 = BoundedBytes<8>;
 type Vec8 = BoundedVec<u16, 8>;
 type Nested = BoundedVec<BoundedBytes<4>, 8>;
 
-/// Postcard varint encoding of `u64::MAX` (10 bytes) — a declared
-/// length/count near `usize::MAX` on 64-bit targets.
+/// Postcard varint encoding of `usize::MAX` on 64-bit targets (10 bytes).
 ///
-/// Not test-verified by encoding a real value of that size (infeasible).
-/// Derived as postcard's unsigned-varint form of `u64::MAX`: nine continuation
-/// bytes `0xFF` followed by a terminating `0x01`. Confirmed by decoding the
-/// fixture's declared count in the cases that assert
-/// `BoundExceeded { declared: u64::MAX as usize, .. }`.
+/// Postcard encodes sequence lengths as a varint `usize`. On a 64-bit target
+/// `usize::MAX == u64::MAX`, so this is nine continuation bytes `0xFF`
+/// followed by a terminating `0x01`. Verified by
+/// [`fixture_varint_prefixes_declare_the_intended_counts`] (decoded value)
+/// and by every adversarial case that reads the declared count out of these
+/// bytes via [`declared_count_from_fixture`].
 const ENORMOUS_VARINT: [u8; 10] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01];
 
 /// Declared count for the moderate-over case and the negative control.
@@ -156,6 +158,49 @@ const MODERATE_DECLARED_COUNT: usize = 4096;
 /// Postcard varint prefix of [`MODERATE_DECLARED_COUNT`], verified by
 /// [`fixture_varint_prefixes_declare_the_intended_counts`].
 const MODERATE_COUNT_VARINT: [u8; 2] = [0x80, 0x20];
+
+// ---------------------------------------------------------------------------
+// Discrimination margin (serde 1.0.229 cautious), read from fixture bytes
+// ---------------------------------------------------------------------------
+
+/// Reads the leading postcard varint `usize` out of `fixture`.
+///
+/// The fixture bytes are the single source of truth for the declared count;
+/// callers must not restate that count as a separate constant to assert
+/// against (that can drift from the bytes it is meant to guard).
+fn declared_count_from_fixture(fixture: &[u8]) -> usize {
+    let (count, _rest) = postcard::take_from_bytes::<usize>(fixture)
+        .expect("fixture must begin with a postcard varint usize");
+    count
+}
+
+/// Asserts that a naive serde-1.0.229 `cautious` preallocation from this
+/// fixture's declared count would clear `2 * ADVERSARIAL_PEAK_LIMIT`.
+///
+/// Reproduces:
+/// ```text
+/// naive_elements = min(declared, 1_048_576 / element_size)
+/// naive_bytes    = naive_elements * element_size
+/// ```
+/// Arithmetic uses `u128` and clamps via `min` before multiplying, so a
+/// declared count near `usize::MAX` cannot overflow the helper.
+fn assert_discrimination_margin(fixture: &[u8], element_size: usize) {
+    assert!(
+        element_size > 0,
+        "element_size must be nonzero (serde cautious divides by it)"
+    );
+    let declared = declared_count_from_fixture(fixture) as u128;
+    let element_size = element_size as u128;
+    let max_elements = 1_048_576u128 / element_size;
+    let naive_elements = declared.min(max_elements);
+    let naive_bytes = naive_elements.saturating_mul(element_size);
+    let need = 2u128 * ADVERSARIAL_PEAK_LIMIT as u128;
+    assert!(
+        naive_bytes >= need,
+        "discrimination margin failed: declared {declared}, element_size {element_size}, \
+         naive_bytes {naive_bytes}, need >= 2 * ADVERSARIAL_PEAK_LIMIT ({need})"
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Harness self-test, negative control, fixture verification
@@ -245,7 +290,9 @@ fn negative_control_plain_vec_exceeds_threshold_on_same_input() {
 }
 
 /// Verify that every hand-computed varint fixture prefix declares the count
-/// it claims, by encoding a real value of that length and comparing prefixes.
+/// it claims: moderate and outer-count-1 by encoding a real value of that
+/// length, and [`ENORMOUS_VARINT`] by decoding the leading varint (encoding
+/// `usize::MAX` elements is infeasible).
 ///
 /// A wrong prefix would declare a different count than intended and the
 /// allocation tests could still pass for the wrong reason.
@@ -258,10 +305,27 @@ fn fixture_varint_prefixes_declare_the_intended_counts() {
         &MODERATE_COUNT_VARINT,
         "MODERATE_COUNT_VARINT must be the postcard prefix of a {MODERATE_DECLARED_COUNT}-element Vec<u16>"
     );
+    assert_eq!(
+        declared_count_from_fixture(&MODERATE_COUNT_VARINT),
+        MODERATE_DECLARED_COUNT
+    );
 
     // Outer-count-1 prefix used by the nested-inner case.
     let one = postcard::to_allocvec(&vec![0u16; 1]).expect("encodes");
     assert_eq!(&one[..1], &[0x01], "outer count 1 must encode as 0x01");
+
+    // ENORMOUS_VARINT: postcard encodes sequence lengths as varint usize.
+    // On a 64-bit target the intended value is usize::MAX (== u64::MAX).
+    assert_eq!(
+        usize::MAX,
+        u64::MAX as usize,
+        "ENORMOUS_VARINT verification assumes a 64-bit target (usize::MAX == u64::MAX)"
+    );
+    assert_eq!(
+        declared_count_from_fixture(&ENORMOUS_VARINT),
+        usize::MAX,
+        "ENORMOUS_VARINT must decode as usize::MAX on this target"
+    );
 
     // Discrimination arithmetic for nested outer depends on the element size.
     // BoundedBytes<N> is a single Vec<u8> (no extra fields); pin that.
@@ -288,6 +352,7 @@ fn fixture_varint_prefixes_declare_the_intended_counts() {
 /// threshold 4_096 → margin 256x.
 #[test]
 fn bounded_vec_enormous_declared_count_allocates_nothing_large() {
+    assert_discrimination_margin(&ENORMOUS_VARINT, std::mem::size_of::<u16>());
     let mut input = ENORMOUS_VARINT.to_vec();
     input.push(0x00);
     let (result, peak) = peak_alloc_of(|| decode_exact::<Vec8>(&input));
@@ -317,6 +382,7 @@ fn bounded_vec_enormous_declared_count_allocates_nothing_large() {
 fn bounded_vec_moderate_over_declared_count_allocates_nothing_large() {
     // Declared count 4096 as a postcard varint (prefix verified by
     // `fixture_varint_prefixes_declare_the_intended_counts`), one stray byte.
+    assert_discrimination_margin(&MODERATE_COUNT_VARINT, std::mem::size_of::<u16>());
     let mut input = MODERATE_COUNT_VARINT.to_vec();
     input.push(0x00);
     let (result, peak) = peak_alloc_of(|| decode_exact::<Vec8>(&input));
@@ -340,6 +406,7 @@ fn bounded_vec_moderate_over_declared_count_allocates_nothing_large() {
 /// 1_048_576` vs threshold 4_096 → margin 256x.
 #[test]
 fn bounded_bytes_enormous_declared_len_allocates_nothing_large() {
+    assert_discrimination_margin(&ENORMOUS_VARINT, std::mem::size_of::<u8>());
     let mut input = ENORMOUS_VARINT.to_vec();
     input.push(0x00);
     let (result, peak) = peak_alloc_of(|| decode_exact::<Bytes8>(&input));
@@ -363,6 +430,7 @@ fn bounded_bytes_enormous_declared_len_allocates_nothing_large() {
 /// 1_048_560` vs threshold 4_096 → margin 255x.
 #[test]
 fn nested_enormous_outer_declaration_allocates_nothing_large() {
+    assert_discrimination_margin(&ENORMOUS_VARINT, std::mem::size_of::<BoundedBytes<4>>());
     let mut input = ENORMOUS_VARINT.to_vec();
     input.push(0x00);
     let (result, peak) = peak_alloc_of(|| decode_exact::<Nested>(&input));
@@ -389,6 +457,9 @@ fn nested_enormous_outer_declaration_allocates_nothing_large() {
 #[test]
 fn nested_enormous_inner_declaration_allocates_nothing_large() {
     // Outer count 1 (within bound), inner byte length u64::MAX, 1 stray byte.
+    // Margin guards the *inner* declaration (the attack), read from its own
+    // fixture bytes — not the outer `0x01` prefix.
+    assert_discrimination_margin(&ENORMOUS_VARINT, std::mem::size_of::<u8>());
     let mut input = vec![0x01u8];
     input.extend_from_slice(&ENORMOUS_VARINT);
     input.push(0x00);
@@ -466,6 +537,7 @@ fn valid_at_bound_decodes_show_proportional_allocation() {
 #[test]
 fn hello_enormous_declared_alg_count_allocates_nothing_large() {
     // Declared algorithm count u64::MAX, one valid algorithm code byte.
+    assert_discrimination_margin(&ENORMOUS_VARINT, std::mem::size_of::<u16>());
     let mut input = ENORMOUS_VARINT.to_vec();
     input.push(0x01);
     let (result, peak) = peak_alloc_of(|| Hello::from_bytes(&input));
