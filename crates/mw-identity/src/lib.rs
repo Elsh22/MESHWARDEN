@@ -64,9 +64,28 @@ pub enum Error {
     /// Signing the canonical form failed.
     #[error("signing the canonical certificate form failed")]
     Signing(#[source] mw_crypto::Error),
-    /// Canonical-form encoding failed (postcard, ADR-015).
+    /// Canonical-form or wire-form encoding failed (postcard, ADR-015).
     #[error("canonical form encoding failed")]
     Codec(#[from] postcard::Error),
+    /// Structural, bound, or trailing-byte failure while decoding certificate
+    /// wire bytes (`mw_proto::decode_exact`).
+    ///
+    /// **Known limitation:** `mw_proto::Error::BoundExceeded` does not name
+    /// which field exceeded its bound, so a decode-time bound failure cannot
+    /// say whether it was the public key, the signature, or the capability
+    /// list. Changing `mw-proto`'s error shape is out of scope here.
+    #[error(transparent)]
+    Wire(#[from] mw_proto::Error),
+    /// Input (or encoded output) exceeds [`mw_proto::MAX_CERTIFICATE_WIRE_BYTES`].
+    #[error("certificate wire encoding is {len} bytes; maximum is {max}")]
+    WireTooLarge { len: usize, max: usize },
+    /// Decoded certificate re-encodes to different bytes than the input
+    /// (ADR-017 §Normative parsing rules rule 2).
+    #[error("certificate wire encoding is not canonical")]
+    NonCanonicalEncoding,
+    /// Signature algorithm registry code is not known to this build.
+    #[error(transparent)]
+    UnknownAlgorithm(#[from] mw_crypto::UnknownAlgorithmCode),
 }
 
 pub type Result<T> = core::result::Result<T, Error>;

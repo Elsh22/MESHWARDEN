@@ -2,12 +2,18 @@
 //!
 //! ADR-008: a node's capabilities are only ever asserted inside this signed,
 //! identity-bound certificate — never loose in a handshake. ADR-015: the
-//! signed canonical form is postcard.
+//! signed canonical form is postcard. ADR-017: the complete certificate also
+//! has a public wire encoding (`to_wire_bytes` / `from_wire_bytes`).
+
+use core::convert::TryFrom;
 
 use mw_crypto::ed25519::PublicKey;
 use mw_crypto::{AlgId, Signature, Signer, Verifier as _};
-use mw_proto::MAX_CERT_CAPABILITIES;
-use serde::Serialize;
+use mw_proto::{
+    BoundedBytes, BoundedVec, MAX_CERT_CAPABILITIES, MAX_CERTIFICATE_WIRE_BYTES,
+    MAX_PUBLIC_KEY_BYTES, MAX_SIGNATURE_BYTES, decode_exact,
+};
+use serde::{Deserialize, Serialize};
 
 use crate::{Error, NodeId, Result};
 
@@ -82,6 +88,29 @@ struct CanonicalForm<'a> {
     valid_from: u64,
     valid_until: u64,
     issuer: &'a NodeId,
+}
+
+/// Complete certificate wire DTO (ADR-017 §*Certificate representations*).
+///
+/// Field order: every [`CanonicalForm`] field in that struct's exact
+/// declaration order, then `signature_algorithm` and `signature`. Private;
+/// constructed only by [`NodeCertificate::to_wire_bytes`] /
+/// [`NodeCertificate::from_wire_bytes`].
+///
+/// `signature_algorithm` is a plain `u16` so unknown codes surface as a typed
+/// identity error after decode, not as postcard's payload-free
+/// `SerdeDeCustom`. Capability codes stay raw `u16` (Amendment 1 descriptive
+/// side) and are never resolved here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CertificateWire {
+    subject: NodeId,
+    public_key: BoundedBytes<MAX_PUBLIC_KEY_BYTES>,
+    capabilities: BoundedVec<u16, MAX_CERT_CAPABILITIES>,
+    valid_from: u64,
+    valid_until: u64,
+    issuer: NodeId,
+    signature_algorithm: u16,
+    signature: BoundedBytes<MAX_SIGNATURE_BYTES>,
 }
 
 fn canonical_bytes(
@@ -268,4 +297,129 @@ impl NodeCertificate {
         }
         Ok(())
     }
+
+    /// Encodes the complete certificate for the wire (ADR-017
+    /// §*Certificate representations*).
+    ///
+    /// Constructs the private wire DTO from this certificate's fields and
+    /// postcard-encodes it. Rejects more than [`MAX_CERT_CAPABILITIES`]
+    /// capabilities with the same [`Error::TooManyCapabilities`] used by
+    /// [`sign`](Self::sign) / [`verify`](Self::verify). Rejects an encoding
+    /// longer than [`MAX_CERTIFICATE_WIRE_BYTES`] with
+    /// [`Error::WireTooLarge`].
+    ///
+    /// Does **not** validate the certificate: encoding is not verification.
+    pub fn to_wire_bytes(&self) -> Result<Vec<u8>> {
+        check_capability_count(&self.capabilities)?;
+        let dto = match Self::wire_dto_from_fields(self) {
+            Ok(dto) => dto,
+            Err(field_err) => {
+                // Prefer the certificate-budget error when the unbounded
+                // encoding would exceed MAX_CERTIFICATE_WIRE_BYTES — the same
+                // gate `from_wire_bytes` applies before parsing — so encode
+                // never produces bytes decode would refuse as WireTooLarge.
+                let unbounded = encode_certificate_wire_unbounded(self)?;
+                if unbounded.len() > MAX_CERTIFICATE_WIRE_BYTES {
+                    return Err(Error::WireTooLarge {
+                        len: unbounded.len(),
+                        max: MAX_CERTIFICATE_WIRE_BYTES,
+                    });
+                }
+                return Err(field_err);
+            }
+        };
+        let bytes = postcard::to_allocvec(&dto)?;
+        if bytes.len() > MAX_CERTIFICATE_WIRE_BYTES {
+            return Err(Error::WireTooLarge {
+                len: bytes.len(),
+                max: MAX_CERTIFICATE_WIRE_BYTES,
+            });
+        }
+        Ok(bytes)
+    }
+
+    /// Decodes a complete certificate from wire bytes (ADR-017
+    /// §*Certificate representations*).
+    ///
+    /// Normative check order (bytes-level before semantic, cheapest first):
+    /// 1. input length against [`MAX_CERTIFICATE_WIRE_BYTES`] →
+    ///    [`Error::WireTooLarge`] (no parse attempt);
+    /// 2. bounded decode with whole-input consumption via
+    ///    [`mw_proto::decode_exact`];
+    /// 3. canonical re-encoding comparison → [`Error::NonCanonicalEncoding`];
+    /// 4. signature-algorithm resolution via [`AlgId::try_from`] →
+    ///    [`Error::UnknownAlgorithm`].
+    ///
+    /// Capability codes are **not** resolved — they remain raw `u16`.
+    ///
+    /// Decoding performs **no** signature verification, identity-consistency
+    /// check, temporal check, or subject-key well-formedness check. A
+    /// decoded certificate with a garbage signature must be rejected by
+    /// [`verify`](Self::verify), not here.
+    pub fn from_wire_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() > MAX_CERTIFICATE_WIRE_BYTES {
+            return Err(Error::WireTooLarge {
+                len: bytes.len(),
+                max: MAX_CERTIFICATE_WIRE_BYTES,
+            });
+        }
+        let dto: CertificateWire = decode_exact(bytes)?;
+        let reencoded = postcard::to_allocvec(&dto)?;
+        if reencoded.as_slice() != bytes {
+            return Err(Error::NonCanonicalEncoding);
+        }
+        let alg = AlgId::try_from(dto.signature_algorithm)?;
+        Ok(Self {
+            subject: dto.subject,
+            public_key: dto.public_key.into_inner(),
+            capabilities: dto.capabilities.into_inner(),
+            valid_from: dto.valid_from,
+            valid_until: dto.valid_until,
+            issuer: dto.issuer,
+            signature: Signature {
+                alg,
+                bytes: dto.signature.into_inner(),
+            },
+        })
+    }
+
+    fn wire_dto_from_fields(cert: &Self) -> Result<CertificateWire> {
+        Ok(CertificateWire {
+            subject: cert.subject,
+            public_key: BoundedBytes::from_slice(&cert.public_key)?,
+            capabilities: BoundedVec::new(cert.capabilities.clone())?,
+            valid_from: cert.valid_from,
+            valid_until: cert.valid_until,
+            issuer: cert.issuer,
+            signature_algorithm: cert.signature.alg.as_u16(),
+            signature: BoundedBytes::from_slice(&cert.signature.bytes)?,
+        })
+    }
+}
+
+/// Postcard encoding byte-identical to [`CertificateWire`], using plain
+/// slices so a certificate whose fields exceed per-field bounds can still be
+/// measured against [`MAX_CERTIFICATE_WIRE_BYTES`] for [`Error::WireTooLarge`].
+fn encode_certificate_wire_unbounded(cert: &NodeCertificate) -> Result<Vec<u8>> {
+    #[derive(Serialize)]
+    struct Encode<'a> {
+        subject: &'a NodeId,
+        public_key: &'a [u8],
+        capabilities: &'a [u16],
+        valid_from: u64,
+        valid_until: u64,
+        issuer: &'a NodeId,
+        signature_algorithm: u16,
+        signature: &'a [u8],
+    }
+    Ok(postcard::to_allocvec(&Encode {
+        subject: &cert.subject,
+        public_key: &cert.public_key,
+        capabilities: &cert.capabilities,
+        valid_from: cert.valid_from,
+        valid_until: cert.valid_until,
+        issuer: &cert.issuer,
+        signature_algorithm: cert.signature.alg.as_u16(),
+        signature: &cert.signature.bytes,
+    })?)
 }
