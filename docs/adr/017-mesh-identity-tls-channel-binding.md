@@ -12,7 +12,7 @@
 | 2 | Post-review redraft: ADR-015 preservation, certificate wire format, negotiation removed, honest `Unauthenticated<S>` characterisation, manifest-level dependency gates |
 | 3 | Maintainer decisions on Q1–Q5 plus eight mandatory corrections: bounded types replacing fixed-size cryptographic arrays, signature lists, `auth_algorithm`, `AuthMachine`/driver split, single pre-authentication buffering rule, bounds-before-allocation obligation, message-code allocation |
 | **4** | **Corrected before first commit; no repository history affected.** (a) Algorithm-allocation wording: `0x0001`–`0x003F` is the current **block layout**, not the allocated set, and `MAX_CERT_CAPABILITIES = 64` is an **independent cardinality bound** with no relationship to the code space. (b) Added *Relationship to `WireVersion.major`*, clarifying the three version axes and deferring wire compatibility to ADR-015. **No normative security decision changed.** |
-| **5** | Six maintainer decisions recorded, 2026-08-10. **Normative content changes** — Amendment 1: scoped exception to algorithm-registry invariant 3 (capability codes are descriptive, carried opaquely as raw `u16`; normative home is `docs/spec/algorithm-registry.md` §*Scope of invariant 3*); Amendment 4: certificate validation ordering, lifetime-cap re-enforcement in `verify`, inverted/zero-length window rejection (§*Certificate validation ordering*); Amendment 5: bounded-decode doctrine (§*Bounded-decode doctrine*, RSK-017-14). **Corrections changing no normative decision** — Amendment 2: `MAX_PUBLIC_KEY_BYTES = 256` and bound-constant ownership recorded (§*Bound-constant ownership and sizing*); Amendment 3: `mw-identity → mw-proto` crate edge (§*Crate ownership*); Amendment 6: deferred `Hello.supported_algs` bound recorded as an open item (§*Revisit triggers*). Unlike Revision 4, which was corrected before first commit, **this revision amends a committed ADR; repository history is affected.** |
+| **5** | Six maintainer decisions recorded, 2026-08-10; **corrected before push; no shared history affected.** **Normative content** — Amendment 1: scoped exception to algorithm-registry invariant 3 (capability codes descriptive, raw `u16`; normative home `docs/spec/algorithm-registry.md` §*Scope of invariant 3*); Amendment 4: certificate validation ordering with narrowed diagnostic claim (§*Certificate validation ordering*); Amendment 5: bounded-decode doctrine (§*Bounded-decode doctrine*, RSK-017-14); `AuthOutcome` carries raw capability codes with the same accessor discipline as `NodeCertificate` (§*Division of responsibility*); Hello's advertisement is descriptive under Amendment 1, with current reject-unknown decode recorded as a known inconsistency deferred with the rest of the `hello.rs` debt (§*Revisit triggers*). **Corrections changing no normative decision** — Amendment 2: `MAX_PUBLIC_KEY_BYTES = 256` and bound-constant ownership; Amendment 3: `mw-identity → mw-proto` crate edge; Amendment 6: deferred `Hello.supported_algs` bound (and, as corrected, the descriptive-decode and error-taxonomy items). Follows Revision 4's precedent: corrected before entering shared history. |
 
 - **Depends on:** ADR-008 (identity-bound capabilities), ADR-015 (postcard canonical encoding, as amended by Erratum 1), ADR-016 (pure-Rust rustls provider)
 - **Builds on:** commit `b1911bd` (certificate self-consistency)
@@ -31,6 +31,8 @@ sign and verify, with `IssuerKeyMismatch` returned before signature verification
 `NodeCertificate` carries `subject`, `public_key`, `capabilities: Vec<AlgId>`, `valid_from`,
 `valid_until`, `issuer`, and an algorithm-tagged signature. Its signing canonical form is
 private, postcard-encoded, and excludes the signature.
+*(Narration of the in-memory shape as of Revision 4. Wire and API capability representation
+is decided in §*Descriptive capability codes* and §*Division of responsibility*: raw `u16`.)*
 
 `NodeId` has an internal fixed 16-byte SHA-256 prefix and a canonical representation of
 exactly 34 ASCII characters: `mw:node:` followed by 26 Base32 characters.
@@ -152,9 +154,11 @@ them and does not depend on `mw-identity`.
 
 ### Capability bound
 
-`capabilities: Vec<AlgId>` is currently unbounded. This ADR introduces
-`MAX_CERT_CAPABILITIES = 64`, enforced **both** during certificate signing/construction
-**and** during wire decoding.
+`NodeCertificate.capabilities` is currently unbounded in the in-memory type. This ADR
+introduces `MAX_CERT_CAPABILITIES = 64`, enforced **both** during certificate
+signing/construction **and** during wire decoding. *(Wire representation of the list is raw
+`u16` codes — see §*Descriptive capability codes*; the cardinality bound is independent of
+that representation.)*
 
 - **64 is an independent cardinality and resource bound**, chosen to sit far above any
   plausible legitimate capability count while bounding decode-time allocation and transcript
@@ -173,8 +177,15 @@ them and does not depend on `mw-identity`.
 
 **Ordering principle:** *structural and resource bounds → identity consistency →
 cryptographic verification → temporal validity.* Cheapest and least semantic first;
-cryptographic verification comes **before** temporal validity, so a forged-and-expired
-certificate reports forgery rather than expiry.
+cryptographic verification comes **before** temporal validity.
+
+**Diagnostic guarantee this ordering delivers:** **No temporal error is ever reported in
+preference to a consistency or cryptographic failure.** A certificate with an invalid
+signature and consistent subject/issuer names reports `BadSignature` regardless of expiry; a
+certificate whose names disagree with its key material reports the corresponding mismatch
+regardless of expiry. (Subject and issuer mismatch precede signature verification in the
+listed `verify` order, so a forged certificate whose issuer name was also altered reports
+`IssuerKeyMismatch`, not `BadSignature` — the ordering is intentional.)
 
 - `sign`: capability count → subject/key consistency → validity-window check → sign.
 - `verify`: capability count → subject mismatch → issuer mismatch → signature →
@@ -236,10 +247,10 @@ correction only: no encoding, canonical bytes, signature, or golden vector chang
 **Authentication v1 is a fixed-algorithm protocol. There is no negotiation.**
 
 Rationale: Ed25519 is the only implemented signature algorithm; `mw_crypto::Signature` is
-already algorithm-tagged; `NodeCertificate.capabilities` already carries `AlgId`s; `Hello`
-already advertises supported algorithms. A fourth mechanism would duplicate existing
-structure to avoid a hypothetical wire change that the versioned label plus
-`AuthTranscriptV2` already handles cleanly.
+already algorithm-tagged; `NodeCertificate.capabilities` already advertises algorithms
+(wire: raw `u16` — §*Descriptive capability codes*); `Hello` already advertises supported
+algorithms. A fourth mechanism would duplicate existing structure to avoid a hypothetical
+wire change that the versioned label plus `AuthTranscriptV2` already handles cleanly.
 
 The fixed algorithm is nonetheless **explicitly bound into the signed transcript** via the
 `auth_algorithm` field. There is nothing to negotiate, but there is no ambiguity about what
@@ -276,6 +287,16 @@ codes*; this ADR references it rather than restating it.
 Every acted-upon code in this ADR — `auth_algorithm`, `WireSignature.algorithm`, a
 certificate key's algorithm — remains subject to invariant 3 unchanged: unknown → typed
 rejection.
+
+`Hello.supported_algs` is also descriptive: §*Authoritative source* already states Hello's
+advertisement is **advisory — usable for routing and diagnostics, never for a security
+decision.** Under Amendment 1 it therefore belongs on the descriptive side, and unknown
+codes should be carried, not fatal. The current decode path maps any unknown code to an
+error and rejects the entire message — **inconsistent with Amendment 1**, recorded here as a
+known inconsistency rather than an oversight. Changing it is a **wire behavior change**
+(input previously rejected becomes accepted) and is deferred to the `mw-proto`
+authentication-message slice together with the rest of the `hello.rs` debt; see §*Revisit
+triggers*.
 
 ---
 
@@ -690,11 +711,34 @@ invert the layering; a binary would make reusable protocol logic unreachable and
 ```rust
 struct AuthOutcome {
     peer_node_id: NodeId,
-    peer_capabilities: Vec<AlgId>,
+    /// Authoritative peer capability codes, raw `u16` (same discipline as
+    /// `NodeCertificate.capabilities` — see below).
+    peer_capability_codes: /* opaque raw-code set */,
     authenticated_at: Timestamp,
     session_valid_until: Timestamp,
 }
 ```
+
+**Capability accessor discipline (normative, Rev 5).** Under Amendment 1, wire-carried
+capabilities may contain unresolvable codes, so a `Vec<AlgId>` cannot represent them
+faithfully. `AuthOutcome` — a normative future API that feeds `mw-trust` authorization —
+therefore carries **raw capability codes**, with the same accessor discipline defined for
+`NodeCertificate`:
+
+1. A **complete authoritative code accessor** returning the full raw `u16` set.
+2. A complete-and-correct `has_capability(AlgId)` predicate that converts the argument to its
+   registry code and searches the raw set.
+3. A **documented-lossy** resolved-subset iterator over codes this build can map to `AlgId`.
+   The lossy accessor **must be named** so no caller mistakes it for the full set (e.g.
+   `known_capabilities` / `resolved_capabilities` — never a bare `capabilities()` that
+   silently drops unknowns).
+
+**Reasoning.** A policy expressed over capabilities must be able to observe that a peer
+advertises a code this build does not recognize, even though it can never act on that code.
+Collapsing to a resolved subset destroys that distinction at exactly the layer that decides
+authorization. INV-6 (`AuthenticatedSession` is an identity assertion, not an authorization
+grant) is unchanged: `mw-trust` still owns authorization; this decision only ensures the
+input it receives is not silently lossy.
 
 **The crate as a whole is not sans-I/O; only `machine` is.** The distinction is maintained
 deliberately so tests target the pure core.
@@ -943,12 +987,20 @@ Changing any of these invalidates this ADR:
 - Post-quantum signature migration begins → the tagged signature list and versioned
   transcript should absorb it.
 - An audit subsystem exists → add local audit events at the listed failure points.
-- The `mw-proto` authentication-message slice allocates its message bounds → allocate a
-  normative `Hello.supported_algs` maximum at the same time (Rev 5). The field currently has
-  **no normative maximum**; inventing one was **explicitly deferred by maintainer decision**,
-  not overlooked, and its decode path is non-preallocating in the interim (growth comes only
-  from bytes actually present). Allocating the constant is a prerequisite for bounding the
-  field, and the authentication-message slice is the natural moment.
+- The `mw-proto` authentication-message slice allocates its message bounds → land the three
+  deferred `hello.rs` items as **one** change (Rev 5):
+  1. Allocate a normative `Hello.supported_algs` maximum. The field currently has **no
+     normative maximum**; inventing one was **explicitly deferred by maintainer decision**,
+     not overlooked, and its decode path is non-preallocating in the interim (growth comes
+     only from bytes actually present). Allocating the constant is a prerequisite for
+     bounding the field.
+  2. Align Hello decode with Amendment 1's descriptive policy: unknown advertisement codes
+     are carried, not fatal. The current reject-unknown behavior is a **known inconsistency**
+     with Amendment 1 (§*Descriptive capability codes*); fixing it is a wire behavior change
+     and must not land earlier.
+  3. Split `UnknownAlgorithm` versus `MalformedPayload` in Hello's error taxonomy (already
+     deferred from slice 1 / 1b).
+  All three touch the same file; the authentication-message slice is the natural moment.
 
 ---
 
@@ -964,6 +1016,12 @@ Changing any of these invalidates this ADR:
 - Exporter is 32 bytes, deterministic within a session, distinct across sessions.
 - A certificate with exactly `MAX_CERT_CAPABILITIES` capabilities encodes within
   `MAX_CERTIFICATE_WIRE_BYTES`.
+- A certificate carrying an **unknown capability code** round-trips through the complete wire
+  representation, and its **canonical signing bytes are unchanged** relative to an equivalent
+  certificate — the signing form already carries capabilities as raw `u16`, so this must hold
+  by construction.
+- `has_capability` answers correctly for a known code on a certificate that **also** carries
+  an unknown code.
 
 **Negative — each must close the channel**
 
@@ -982,6 +1040,9 @@ Changing any of these invalidates this ADR:
 | Two signatures | `ProtocolViolation` |
 | Duplicate algorithm codes | `ProtocolViolation` |
 | Unknown algorithm code | `UnsupportedAlgorithm` |
+| Unknown **signature** algorithm code | `UnsupportedAlgorithm` — acted-upon side of Amendment 1 |
+| Unknown **public-key** algorithm code | `UnsupportedAlgorithm` — acted-upon side of Amendment 1 |
+| Resolved-subset accessor omits an unknown capability code while the raw accessor includes it | pins documented lossiness (Rev 5) |
 | Signature algorithm ≠ `auth_algorithm` | `UnsupportedAlgorithm` |
 | Signature algorithm ≠ certificate key algorithm | `UnsupportedAlgorithm` |
 | Node id unparseable | `ProtocolViolation` |

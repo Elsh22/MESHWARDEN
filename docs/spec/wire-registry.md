@@ -82,8 +82,9 @@ does not redefine any assignment.
 ### Relationship to `MAX_CERT_CAPABILITIES`
 
 `MAX_CERT_CAPABILITIES = 64` (ADR-017) is an **independent cardinality and resource bound** on
-`NodeCertificate.capabilities: Vec<AlgId>`. Its purpose is to bound decode-time allocation and
-transcript size.
+`NodeCertificate.capabilities` (raw `u16` codes on the wire; see
+`docs/spec/algorithm-registry.md` §*Scope of invariant 3*). Its purpose is to bound
+decode-time allocation and transcript size.
 
 It does **not** imply that 64 algorithms are allocated, it does **not** derive from the
 `0x0001`–`0x003F` block layout, and it does **not** restrict future algorithm codes to
