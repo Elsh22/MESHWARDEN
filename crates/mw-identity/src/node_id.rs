@@ -54,8 +54,13 @@ impl FromStr for NodeId {
     type Err = Error;
 
     /// Parses and validates the textual form. Rejects a missing or wrong
-    /// scheme, wrong encoded length (including padded input), and any
-    /// character outside the RFC 4648 base32 alphabet.
+    /// scheme, wrong encoded length (including padded input), any character
+    /// outside the RFC 4648 base32 alphabet (including lowercase), and
+    /// non-canonical encodings with non-zero trailing bits.
+    ///
+    /// Trailing-bit and case canonicality are load-bearing for
+    /// `AuthTranscriptV1`'s 34-byte node-id fields (ADR-017 §*Testing
+    /// obligations*).
     fn from_str(s: &str) -> Result<Self, Error> {
         let malformed = || Error::MalformedNodeId(s.to_owned());
         let encoded = s.strip_prefix(NODE_ID_SCHEME).ok_or_else(malformed)?;
@@ -65,7 +70,13 @@ impl FromStr for NodeId {
         let decoded = BASE32_NOPAD
             .decode(encoded.as_bytes())
             .map_err(|_| malformed())?;
-        let prefix = decoded.try_into().map_err(|_| malformed())?;
+        let prefix: [u8; NODE_ID_PREFIX_LEN] = decoded.try_into().map_err(|_| malformed())?;
+        // 26 base32 chars encode 130 bits for 128 bits of data; non-zero
+        // trailing bits are non-canonical. Re-encode and require an exact
+        // match so this obligation does not depend solely on decoder policy.
+        if BASE32_NOPAD.encode(&prefix) != encoded {
+            return Err(malformed());
+        }
         Ok(Self { prefix })
     }
 }

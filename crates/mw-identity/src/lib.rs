@@ -2,9 +2,9 @@
 //! and the identity-bound capability certificate [`NodeCertificate`]
 //! (ADR-008, ADR-009, ADR-015).
 //!
-//! Depends on `mw-crypto` and no other `mw-*` crate. X.509/DER, enrollment
-//! (`mw-ca`), rustls integration (`mw-transport`), and revocation are out of
-//! scope here.
+//! Depends on `mw-crypto` and `mw-proto` (bound constants; ADR-017 Amendment 3).
+//! X.509/DER, enrollment (`mw-ca`), rustls integration (`mw-transport`), and
+//! revocation are out of scope here.
 //!
 //! No ambient clock: every temporal check takes `now` (unix seconds) as a
 //! parameter; `SystemTime::now()` is never called in this crate.
@@ -37,15 +37,28 @@ pub enum Error {
     /// key would otherwise pass.
     #[error("certificate issuer does not match the supplied issuer public key")]
     IssuerKeyMismatch,
-    /// ADR-009: the validity window is longer than
-    /// [`MAX_CERT_LIFETIME_SECS`], or inverted (`valid_until < valid_from`).
+    /// ADR-009 / ADR-017: the validity window is longer than
+    /// [`MAX_CERT_LIFETIME_SECS`], inverted (`valid_until < valid_from`), or
+    /// zero-length (`valid_until == valid_from`).
     #[error(
         "certificate validity window {valid_from}..{valid_until} exceeds \
-         maximum lifetime {max}s or is inverted",
+         maximum lifetime {max}s, is inverted, or is zero-length",
         max = MAX_CERT_LIFETIME_SECS
     )]
     LifetimeExceedsMaximum { valid_from: u64, valid_until: u64 },
+    /// ADR-017: more than [`mw_proto::MAX_CERT_CAPABILITIES`] capability codes.
+    #[error("certificate has {count} capabilities; maximum is {max}")]
+    TooManyCapabilities { count: usize, max: usize },
+    /// Subject `public_key` is not a well-formed Ed25519 public key.
+    ///
+    /// Implicit algorithm assumption: ADR-017 §*Legacy: `NodeCertificate.public_key`
+    /// is untagged*.
+    #[error("certificate subject public key is not a well-formed Ed25519 key")]
+    MalformedSubjectPublicKey(#[source] mw_crypto::Error),
     /// Input does not parse as `mw:node:<base32-sha256-prefix>`.
+    ///
+    /// Embeds the caller-supplied input string; callers should be deliberate
+    /// about what reaches logs.
     #[error("malformed node id: {0:?}")]
     MalformedNodeId(String),
     /// Signing the canonical form failed.

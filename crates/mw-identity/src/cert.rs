@@ -6,6 +6,7 @@
 
 use mw_crypto::ed25519::PublicKey;
 use mw_crypto::{AlgId, Signature, Signer, Verifier as _};
+use mw_proto::MAX_CERT_CAPABILITIES;
 use serde::Serialize;
 
 use crate::{Error, NodeId, Result};
@@ -27,9 +28,15 @@ pub const MAX_CERT_LIFETIME_SECS: u64 = 8 * 60 * 60;
 #[derive(Debug, Clone)]
 pub struct CertificateFields {
     pub subject: NodeId,
-    /// Raw Ed25519 public key bytes of the subject.
+    /// Raw subject public-key bytes.
+    ///
+    /// Untagged: there is no algorithm field on the certificate. In v1 these
+    /// are interpreted as Ed25519 (ADR-017 §*Legacy: `NodeCertificate.public_key`
+    /// is untagged*). Adding a `public_key_algorithm` field is a separate
+    /// coupled decision requiring its own ADR.
     pub public_key: Vec<u8>,
-    pub capabilities: Vec<AlgId>,
+    /// Capability registry codes (raw `u16`; ADR-017 Amendment 1).
+    pub capabilities: Vec<u16>,
     /// Unix seconds, inclusive.
     pub valid_from: u64,
     /// Unix seconds, exclusive.
@@ -45,9 +52,15 @@ pub struct CertificateFields {
 #[derive(Debug, Clone)]
 pub struct NodeCertificate {
     pub subject: NodeId,
-    /// Raw Ed25519 public key bytes of the subject.
+    /// Raw subject public-key bytes.
+    ///
+    /// Untagged: there is no algorithm field on the certificate. In v1 these
+    /// are interpreted as Ed25519 (ADR-017 §*Legacy: `NodeCertificate.public_key`
+    /// is untagged*). Adding a `public_key_algorithm` field is a separate
+    /// coupled decision requiring its own ADR.
     pub public_key: Vec<u8>,
-    pub capabilities: Vec<AlgId>,
+    /// Capability registry codes (raw `u16`; ADR-017 Amendment 1).
+    pub capabilities: Vec<u16>,
     /// Unix seconds, inclusive.
     pub valid_from: u64,
     /// Unix seconds, exclusive.
@@ -57,9 +70,10 @@ pub struct NodeCertificate {
 }
 
 /// Canonical signing form (ADR-015): every field except the signature, in
-/// declaration order, postcard-serialized. `AlgId` is carried as its registry
-/// `u16` code (docs/spec/algorithm-registry.md). Any change to this struct's
-/// field set, order, or types invalidates every previously issued signature.
+/// declaration order, postcard-serialized. Capabilities are raw registry
+/// `u16` codes (docs/spec/algorithm-registry.md; ADR-017 Amendment 1). Any
+/// change to this struct's field set, order, or types invalidates every
+/// previously issued signature.
 #[derive(Serialize)]
 struct CanonicalForm<'a> {
     subject: &'a NodeId,
@@ -73,7 +87,7 @@ struct CanonicalForm<'a> {
 fn canonical_bytes(
     subject: &NodeId,
     public_key: &[u8],
-    capabilities: &[AlgId],
+    capabilities: &[u16],
     valid_from: u64,
     valid_until: u64,
     issuer: &NodeId,
@@ -81,7 +95,7 @@ fn canonical_bytes(
     let form = CanonicalForm {
         subject,
         public_key,
-        capabilities: capabilities.iter().map(|&alg| alg as u16).collect(),
+        capabilities: capabilities.to_vec(),
         valid_from,
         valid_until,
         issuer,
@@ -89,13 +103,19 @@ fn canonical_bytes(
     Ok(postcard::to_allocvec(&form)?)
 }
 
-/// ADR-009: the lifetime bound is enforced at construction so an over-long
-/// certificate can never be issued, rather than caught at verification.
-/// Inverted windows (`valid_until < valid_from`) are rejected on the same
-/// path.
+/// ADR-009 / ADR-017: the lifetime bound and window shape are enforced at
+/// construction (`sign`) and re-enforced at verification (`verify`).
+///
+/// Construction-time enforcement was sufficient only while `sign` was the
+/// sole way a certificate could exist; once certificates arrive from the
+/// wire, an issuer with a valid key could otherwise mint a certificate
+/// outliving the short-lifetime scheme that stands in for revocation
+/// (coupled to RSK-017-4). Inverted windows (`valid_until < valid_from`) and
+/// zero-length windows (`valid_until == valid_from`) are rejected on the
+/// same path.
 fn check_lifetime(valid_from: u64, valid_until: u64) -> Result<()> {
     match valid_until.checked_sub(valid_from) {
-        Some(lifetime) if lifetime <= MAX_CERT_LIFETIME_SECS => Ok(()),
+        Some(lifetime) if lifetime > 0 && lifetime <= MAX_CERT_LIFETIME_SECS => Ok(()),
         _ => Err(Error::LifetimeExceedsMaximum {
             valid_from,
             valid_until,
@@ -103,15 +123,71 @@ fn check_lifetime(valid_from: u64, valid_until: u64) -> Result<()> {
     }
 }
 
+fn check_capability_count(capabilities: &[u16]) -> Result<()> {
+    let count = capabilities.len();
+    if count > MAX_CERT_CAPABILITIES {
+        return Err(Error::TooManyCapabilities {
+            count,
+            max: MAX_CERT_CAPABILITIES,
+        });
+    }
+    Ok(())
+}
+
+/// Validates that `public_key` is a well-formed Ed25519 public key.
+///
+/// Implicit algorithm assumption (ADR-017 §*Legacy: `NodeCertificate.public_key`
+/// is untagged*): the certificate carries no algorithm tag on `public_key`, so
+/// treating it as Ed25519 holds only while Ed25519 is the sole implemented
+/// signature algorithm. Adding a `public_key_algorithm` field is a separate
+/// coupled decision requiring its own ADR — never invent it here.
+fn check_subject_public_key(public_key: &[u8]) -> Result<()> {
+    PublicKey::from_bytes(public_key).map_err(Error::MalformedSubjectPublicKey)?;
+    Ok(())
+}
+
 impl NodeCertificate {
+    /// Complete, authoritative capability set as raw registry codes.
+    pub fn capability_codes(&self) -> &[u16] {
+        &self.capabilities
+    }
+
+    /// Complete and correct for both positive and negative queries.
+    ///
+    /// Compares `alg.as_u16()` against the stored raw codes — does not resolve
+    /// stored codes to [`AlgId`] first, so an unresolvable code in the set
+    /// cannot silently change the answer.
+    pub fn has_capability(&self, alg: AlgId) -> bool {
+        let code = alg.as_u16();
+        self.capabilities.contains(&code)
+    }
+
+    /// LOSSY: yields only codes this build can resolve to an [`AlgId`].
+    ///
+    /// This is **not** the complete capability set. Unknown or otherwise
+    /// unresolvable registry codes present on the certificate are omitted.
+    /// Callers that need the authoritative set must use
+    /// [`capability_codes`](Self::capability_codes) or
+    /// [`has_capability`](Self::has_capability).
+    pub fn known_capabilities(&self) -> impl Iterator<Item = AlgId> + '_ {
+        self.capabilities
+            .iter()
+            .copied()
+            .filter_map(|code| AlgId::from_u16(code).ok())
+    }
+
     /// Signs `fields` with the issuer's key, producing a certificate.
     ///
-    /// Enforces [`MAX_CERT_LIFETIME_SECS`] before signing (ADR-009). The
+    /// Validation order (ADR-017 §*Certificate validation ordering*):
+    /// capability count → subject key well-formedness → subject/key
+    /// consistency → validity window → sign.
+    ///
+    /// Enforces [`MAX_CERT_LIFETIME_SECS`] and the window shape at
+    /// construction (ADR-009), and [`MAX_CERT_CAPABILITIES`] (ADR-017). The
     /// signature is over the postcard canonical form (ADR-015).
-    /// Refuses to mint a certificate whose `subject` is not the [`NodeId`]
-    /// derived from its `public_key` ([`Error::SubjectKeyMismatch`]), so a
-    /// name/key-inconsistent certificate never exists with a valid signature.
     pub fn sign(fields: CertificateFields, issuer: &impl Signer) -> Result<Self> {
+        check_capability_count(&fields.capabilities)?;
+        check_subject_public_key(&fields.public_key)?;
         // Subject/issuer NodeId comparisons here and in `verify` operate on
         // public data (identities derived from public keys), so a
         // non-constant-time `!=` leaks nothing.
@@ -142,16 +218,24 @@ impl NodeCertificate {
     /// Verifies the signature over the canonical form against the issuer's
     /// public key, then checks `valid_from <= now < valid_until`.
     ///
+    /// Validation order (ADR-017 §*Certificate validation ordering*):
+    /// capability count → subject key well-formedness → subject mismatch →
+    /// issuer mismatch → signature → validity-window re-check →
+    /// not-yet-valid → expired.
+    ///
+    /// The lifetime cap and window shape are re-enforced here, not only in
+    /// [`sign`](Self::sign): once certificates arrive from the wire, an
+    /// issuer with a valid key could otherwise mint a certificate outliving
+    /// the short-lifetime scheme that stands in for revocation (RSK-017-4).
+    /// Wire decoding (slice 2b) stays concerned with bytes, counts, and
+    /// canonicality only — this is the one semantic enforcement point for
+    /// wire-arrived certificates.
+    ///
     /// `now` (unix seconds) is injected by the caller — this crate never
     /// reads an ambient clock, so validity is testable at any instant.
-    ///
-    /// Before the signature check, enforces identity/key self-consistency:
-    /// `subject` must be the [`NodeId`] derived from the certificate's own
-    /// `public_key`, and `issuer` must be the [`NodeId`] derived from
-    /// `issuer_public_key` — a NodeId is *defined* as the hash of a key, so a
-    /// certificate whose names disagree with its key material is invalid no
-    /// matter who signed it.
     pub fn verify(&self, issuer_public_key: &PublicKey, now: u64) -> Result<()> {
+        check_capability_count(&self.capabilities)?;
+        check_subject_public_key(&self.public_key)?;
         if self.subject != NodeId::from_public_key_bytes(&self.public_key) {
             return Err(Error::SubjectKeyMismatch);
         }
@@ -169,6 +253,7 @@ impl NodeCertificate {
         issuer_public_key
             .verify(&msg, &self.signature)
             .map_err(Error::BadSignature)?;
+        check_lifetime(self.valid_from, self.valid_until)?;
         if now < self.valid_from {
             return Err(Error::NotYetValid {
                 valid_from: self.valid_from,

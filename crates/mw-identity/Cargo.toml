@@ -7,6 +7,8 @@ rust-version.workspace = true
 [dependencies]
 # ADR-007: crypto only via mw-crypto; no primitive crypto crates here.
 mw-crypto = { path = "../mw-crypto" }
+# ADR-017 Amendment 3: bound constants (MAX_CERT_CAPABILITIES) live in mw-proto.
+mw-proto = { path = "../mw-proto" }
 postcard = { workspace = true }
 data-encoding = { workspace = true }
 serde = { workspace = true }

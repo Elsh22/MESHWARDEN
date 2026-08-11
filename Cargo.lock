@@ -536,6 +536,7 @@ version = "0.1.0"
 dependencies = [
  "data-encoding",
  "mw-crypto",
+ "mw-proto",
  "postcard",
  "serde",
  "thiserror",
