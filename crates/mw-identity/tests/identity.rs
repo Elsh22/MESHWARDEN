@@ -472,36 +472,26 @@ fn capability_codes_includes_unknown_known_capabilities_omits_it() {
     assert!(!known.iter().any(|&a| a.as_u16() == 0x00FF));
 }
 
-#[test]
-fn malformed_subject_public_key_rejected_by_sign_and_verify() {
-    // Property: non-Ed25519-point public_key rejected by sign and verify.
-    // ADR-017 §Legacy: NodeCertificate.public_key is untagged / §Testing obligations.
+/// Shared sign+verify rejection check for a subject `public_key` fixture that
+/// `PublicKey::from_bytes` must reject. Subject is derived from the bad key so
+/// the failure is well-formedness, not `SubjectKeyMismatch`.
+fn assert_malformed_subject_key_rejected_by_sign_and_verify(bad_key: Vec<u8>) -> mw_crypto::Error {
     let issuer = Keystore::generate();
     let subject = Keystore::generate();
 
-    // Wrong length: rejected by mw_crypto::ed25519::PublicKey::from_bytes.
-    // (On the pinned dalek stack, essentially all 32-byte strings decompress;
-    // length is the reliable well-formedness failure via that constructor.)
-    let bad_key = vec![0x11u8; 31];
-    assert!(
-        PublicKey::from_bytes(&bad_key).is_err(),
-        "fixture must be rejected by PublicKey::from_bytes"
-    );
+    let from_bytes_err = PublicKey::from_bytes(&bad_key)
+        .expect_err("fixture must be rejected by PublicKey::from_bytes");
 
     let mut f = fields(&subject, &issuer, 1_000, 2_000);
     f.public_key = bad_key.clone();
-    // Subject derived from the bad key so the failure is well-formedness,
-    // not SubjectKeyMismatch (which comes later in sign).
     f.subject = NodeId::from_public_key_bytes(&bad_key);
     let result = NodeCertificate::sign(f, &issuer);
-    assert!(
-        matches!(result, Err(Error::MalformedSubjectPublicKey(_))),
-        "sign must reject malformed subject key, got {result:?}"
-    );
+    let sign_err = match result {
+        Err(Error::MalformedSubjectPublicKey(e)) => e,
+        other => panic!("sign must reject malformed subject key, got {other:?}"),
+    };
 
-    // verify: build a cert that passes earlier checks' structure via direct
-    // construction with a valid signature over the bad-key form — actually
-    // well-formedness precedes signature, so a stub signature suffices.
+    // Well-formedness precedes signature, so a stub signature suffices.
     let cert = NodeCertificate {
         subject: NodeId::from_public_key_bytes(&bad_key),
         public_key: bad_key,
@@ -515,10 +505,72 @@ fn malformed_subject_public_key_rejected_by_sign_and_verify() {
         },
     };
     let result = cert.verify(&verifier_of(&issuer), 1_500);
-    assert!(
-        matches!(result, Err(Error::MalformedSubjectPublicKey(_))),
-        "verify must reject malformed subject key, got {result:?}"
+    let verify_err = match result {
+        Err(Error::MalformedSubjectPublicKey(e)) => e,
+        other => panic!("verify must reject malformed subject key, got {other:?}"),
+    };
+
+    // The typed error is identical across length and point failures (both map
+    // to `mw_crypto::Error::MalformedKey { alg: Ed25519 }`); pin that here.
+    assert!(matches!(
+        from_bytes_err,
+        mw_crypto::Error::MalformedKey {
+            alg: AlgId::Ed25519
+        }
+    ));
+    assert_eq!(
+        format!("{from_bytes_err:?}"),
+        format!("{sign_err:?}"),
+        "sign must surface the same typed MalformedKey as from_bytes"
     );
+    assert_eq!(
+        format!("{from_bytes_err:?}"),
+        format!("{verify_err:?}"),
+        "verify must surface the same typed MalformedKey as from_bytes"
+    );
+    from_bytes_err
+}
+
+#[test]
+fn subject_public_key_of_wrong_length_rejected_by_sign_and_verify() {
+    // Property: wrong-length public_key rejected by sign and verify.
+    // ADR-017 §Legacy: NodeCertificate.public_key is untagged / §Testing obligations.
+    // Reaches `PublicKey::from_bytes` length branch (`try_into` to `[u8; 32]`).
+    let bad_key = vec![0x11u8; 31];
+    let err = assert_malformed_subject_key_rejected_by_sign_and_verify(bad_key);
+    assert!(matches!(
+        err,
+        mw_crypto::Error::MalformedKey {
+            alg: AlgId::Ed25519
+        }
+    ));
+}
+
+#[test]
+fn subject_public_key_invalid_point_rejected_by_sign_and_verify() {
+    // Property: 32-byte non-Ed25519-point public_key rejected by sign and verify.
+    // ADR-017 §Legacy: NodeCertificate.public_key is untagged / §Testing obligations
+    // (RSK-017-15 mitigation: well-formedness checking).
+    //
+    // Fixture `[0x02; 32]` is 32 bytes of correct length whose decompression
+    // fails on ed25519-dalek 2.2.0, so this reaches the `VerifyingKey::from_bytes`
+    // branch rather than the length branch. That failure is a computed property
+    // of these specific bytes — changing them requires re-checking point
+    // validity (same discipline as the `[0x11; 32]` / `[0x22; 32]` fixture note
+    // in ADR-017 §Testing obligations).
+    //
+    // Note: `mw_crypto::Error::MalformedKey` does not distinguish length from
+    // point failure; both branches of `PublicKey::from_bytes` map to the same
+    // variant. Observed error for this fixture is therefore identical in type
+    // to the wrong-length case.
+    let bad_key = vec![0x02u8; 32];
+    let err = assert_malformed_subject_key_rejected_by_sign_and_verify(bad_key);
+    assert!(matches!(
+        err,
+        mw_crypto::Error::MalformedKey {
+            alg: AlgId::Ed25519
+        }
+    ));
 }
 
 #[test]
