@@ -56,13 +56,47 @@ where
     seq.end()
 }
 
+/// Decodes the algorithm sequence without preallocating from a size hint.
+///
+/// `Hello::from_bytes` decodes through [`crate::decode_exact`], whose opaque
+/// flavor wrapper makes the declared element count visible to every visitor
+/// (see the doctrine on `decode_exact`). Delegating to
+/// `Vec::<u16>::deserialize` would let `serde`'s `Vec` visitor
+/// `with_capacity` from that attacker-controlled declaration (capped at
+/// ~1 MiB by `size_hint::cautious`). This visitor instead starts from
+/// `Vec::new()` and pushes as elements decode, so growth comes only from
+/// bytes actually present.
+///
+/// `Hello.supported_algs` has no normative maximum, and inventing one is
+/// forbidden: push-until-input-exhausted is the correct behavior. Unknown
+/// algorithm codes still map through [`alg_from_u16`]; the
+/// `UnknownAlgorithm`-vs-`MalformedPayload` error-taxonomy split remains the
+/// auth-message slice's job.
 fn deserialize_algs<'de, D>(deserializer: D) -> core::result::Result<Vec<AlgId>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let codes: Vec<u16> = Vec::deserialize(deserializer)?;
-    codes
-        .into_iter()
-        .map(|c| alg_from_u16(c).map_err(serde::de::Error::custom))
-        .collect()
+    struct AlgSeqVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for AlgSeqVisitor {
+        type Value = Vec<AlgId>;
+
+        fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str("a sequence of u16 algorithm codes")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> core::result::Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            // Deliberately ignores `seq.size_hint()`.
+            let mut algs = Vec::new();
+            while let Some(code) = seq.next_element::<u16>()? {
+                algs.push(alg_from_u16(code).map_err(serde::de::Error::custom)?);
+            }
+            Ok(algs)
+        }
+    }
+
+    deserializer.deserialize_seq(AlgSeqVisitor)
 }

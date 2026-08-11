@@ -148,6 +148,42 @@ impl<'de> Flavor<'de> for OpaqueLenSlice<'de> {
 /// Overlong varints are out of scope here; they are caught by the canonical
 /// re-encode comparison in the certificate slice (ADR-017 §Normative parsing
 /// rules rule 2).
+///
+/// # Doctrine: opaque size hint
+///
+/// `decode_exact` deserializes through a flavor wrapper whose `size_hint()`
+/// is opaque (always `None`). This is deliberate: it makes postcard's
+/// `SeqAccess::size_hint` report the declared element count unconditionally,
+/// which is what lets the bounded types see and reject a declared count
+/// before decoding elements.
+///
+/// **Consequence:** the wrapper also removes the incidental clamp postcard's
+/// `Slice` flavor provided (suppressing the declared count whenever the
+/// remaining input was shorter). The declared count is therefore visible to
+/// **every** visitor in the decode, including `serde`'s built-in `Vec` /
+/// `String` / map visitors, which preallocate from it (capped at ~1 MiB by
+/// `size_hint::cautious`). Any type decoded through `decode_exact` must
+/// therefore contain **no field whose `Deserialize` preallocates from
+/// `SeqAccess::size_hint`** — in practice, no plain `Vec<T>`, `String`, or
+/// map field. Use [`BoundedBytes`] / [`BoundedVec`], or a push-loop visitor
+/// that starts from `Vec::new()` and ignores the hint (see
+/// `hello::deserialize_algs`).
+///
+/// # Doctrine: violation channel and async
+///
+/// The violation channel is a thread-local behind a scoped guard
+/// (`ViolationScope`). **It must never be held across an `.await`.**
+/// `decode_exact` is synchronous and contains no await points, so this holds
+/// today by construction; a future caller that wrapped a decode in an async
+/// fn and yielded mid-decode could misattribute a violation across tasks.
+/// Noted for the driver slice.
+///
+/// # Doctrine: `std`-only
+///
+/// The thread-local makes this module `std`-only. ADR-015 notes postcard's
+/// `no_std`/`alloc` fit; if `mw-proto` ever needs `no_std`, this mechanism
+/// needs revisiting. Recorded as a known constraint, not a problem to solve
+/// now.
 pub fn decode_exact<'de, T: serde::Deserialize<'de>>(bytes: &'de [u8]) -> Result<T> {
     let scope = ViolationScope::enter();
     let flavor = OpaqueLenSlice {
