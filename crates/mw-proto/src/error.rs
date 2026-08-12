@@ -21,6 +21,10 @@ pub enum Error {
 
     /// Payload bytes failed to decode under the payload codec (postcard,
     /// ADR-015).
+    ///
+    /// Retained for historical / non-Hello-auth callers. Hello and auth
+    /// encode failures map to [`Error::EncodeFailed`]; Hello/auth decode
+    /// failures pass through typed decode errors.
     #[error("malformed payload")]
     MalformedPayload,
 
@@ -40,6 +44,28 @@ pub enum Error {
     /// specific cause available.
     #[error("malformed wire input")]
     MalformedWire,
+
+    /// Auth message (or transcript) total encoded length exceeds its
+    /// pre-authentication bound.
+    #[error("message too large: {len} bytes exceeds limit {max}")]
+    MessageTooLarge { len: usize, max: usize },
+
+    /// Canonical re-encode comparison failed (ADR-017 §Normative parsing
+    /// rules rule 2). Postcard may accept overlong varints; this variant
+    /// is the normative rejection.
+    #[error("non-canonical encoding")]
+    NonCanonicalEncoding,
+
+    /// Encode-path failure (postcard serialization) for Hello or auth
+    /// messages. Split from [`Error::MalformedPayload`] so encode and
+    /// decode failures do not share a decode-flavored variant (I-2).
+    #[error("encode failed")]
+    EncodeFailed,
+
+    /// `AuthTranscriptV1.role` was neither [`crate::AUTH_ROLE_CLIENT`] nor
+    /// [`crate::AUTH_ROLE_SERVER`].
+    #[error("invalid auth role 0x{0:02X}")]
+    InvalidAuthRole(u8),
 }
 
 pub type Result<T> = core::result::Result<T, Error>;

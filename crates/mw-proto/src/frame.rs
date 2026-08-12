@@ -17,18 +17,62 @@ const HEADER_LEN: usize = 2 + 2 + 4;
 /// written big-endian by [`Frame::encode`]. A serde derive would be an
 /// alternate-encoding channel disagreeing with the wire (postcard would emit
 /// the variant index, not the discriminant).
+///
+/// `0x0000` remains permanently invalid. Enforcement is `mw-session`
+/// dispatch, not this enum — unknown and invalid codes are absent from
+/// [`MessageType::from_u16`] and are handled by the session layer.
 #[repr(u16)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MessageType {
     Hello = 0x0001,
+    AuthInit = 0x0002,
+    AuthResponse = 0x0003,
+    AuthConfirm = 0x0004,
 }
 
 impl MessageType {
+    /// Every known message type in this build.
+    pub const ALL: &'static [MessageType] = &[
+        MessageType::Hello,
+        MessageType::AuthInit,
+        MessageType::AuthResponse,
+        MessageType::AuthConfirm,
+    ];
+
     /// Wire discriminator value.
+    ///
+    /// Exhaustive match is a deliberate compile-time drift guard: adding a
+    /// variant without updating this match produces E0004. Do not simplify
+    /// to a bare `self as u16`.
     pub const fn as_u16(self) -> u16 {
-        self as u16
+        match self {
+            MessageType::Hello => 0x0001,
+            MessageType::AuthInit => 0x0002,
+            MessageType::AuthResponse => 0x0003,
+            MessageType::AuthConfirm => 0x0004,
+        }
+    }
+
+    /// Wire discriminator to message type. Unknown codes yield `None`.
+    ///
+    /// Exhaustive over known codes; no wildcard returning a default.
+    pub const fn from_u16(code: u16) -> Option<Self> {
+        match code {
+            0x0001 => Some(MessageType::Hello),
+            0x0002 => Some(MessageType::AuthInit),
+            0x0003 => Some(MessageType::AuthResponse),
+            0x0004 => Some(MessageType::AuthConfirm),
+            _ => None,
+        }
     }
 }
+
+// Compile-time discriminant pins (mirror AlgId).
+const _: () = assert!(MessageType::Hello.as_u16() == 0x0001);
+const _: () = assert!(MessageType::AuthInit.as_u16() == 0x0002);
+const _: () = assert!(MessageType::AuthResponse.as_u16() == 0x0003);
+const _: () = assert!(MessageType::AuthConfirm.as_u16() == 0x0004);
+const _: () = assert!(MessageType::ALL.len() == 4);
 
 /// Length-delimited frame envelope.
 ///

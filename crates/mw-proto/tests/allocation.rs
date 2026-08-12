@@ -50,7 +50,10 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use mw_proto::{BoundedBytes, BoundedVec, Error, Hello, decode_exact};
+use mw_proto::{
+    AuthConfirm, AuthInit, BoundedBytes, BoundedVec, Error, Hello, MAX_HELLO_ALGS,
+    MAX_PROOF_SIGNATURES, decode_exact,
+};
 
 // ---------------------------------------------------------------------------
 // Counting allocator
@@ -537,13 +540,72 @@ fn valid_at_bound_decodes_show_proportional_allocation() {
 #[test]
 fn hello_enormous_declared_alg_count_allocates_nothing_large() {
     // Declared algorithm count u64::MAX, one valid algorithm code byte.
+    // After Slice 3, Hello uses BoundedVec<u16, MAX_HELLO_ALGS>, so the typed
+    // rejection is BoundExceeded (not MalformedPayload).
     assert_discrimination_margin(&ENORMOUS_VARINT, std::mem::size_of::<u16>());
     let mut input = ENORMOUS_VARINT.to_vec();
     input.push(0x01);
     let (result, peak) = peak_alloc_of(|| Hello::from_bytes(&input));
     assert_eq!(
         result.expect_err("enormous algorithm count must fail"),
-        Error::MalformedPayload
+        Error::BoundExceeded {
+            declared: u64::MAX as usize,
+            max: MAX_HELLO_ALGS
+        }
+    );
+    assert!(
+        peak <= ADVERSARIAL_PEAK_LIMIT,
+        "peak {peak} bytes exceeds limit {ADVERSARIAL_PEAK_LIMIT}"
+    );
+}
+
+/// §9.20 — AuthConfirm with an enormous declared signature count.
+///
+/// Discrimination: declared `u64::MAX`, element `WireSignature` is larger than
+/// `u16`; naive counterpart uses the outer sequence element as if it were a
+/// plain `Vec` of a pointer-sized struct. We guard the declared count the
+/// same way as BoundedVec<u16>: element size of a struct containing `u16` +
+/// `Vec<u8>` is at least `size_of::<u16>()`, and the fixture's declared count
+/// still clears 2× threshold under the cautious formula for `u16` (2 bytes).
+/// Using `size_of::<u16>()` keeps the margin arithmetic consistent with other
+/// sequence cases; the real WireSignature is larger, so naive bytes would be
+/// even bigger.
+#[test]
+fn auth_confirm_enormous_declared_signature_count_allocates_nothing_large() {
+    assert_discrimination_margin(&ENORMOUS_VARINT, std::mem::size_of::<u16>());
+    let mut input = ENORMOUS_VARINT.to_vec();
+    input.push(0x00);
+    let (result, peak) = peak_alloc_of(|| AuthConfirm::from_bytes(&input));
+    assert_eq!(
+        result.expect_err("enormous signature count must fail"),
+        Error::BoundExceeded {
+            declared: u64::MAX as usize,
+            max: MAX_PROOF_SIGNATURES
+        }
+    );
+    assert!(
+        peak <= ADVERSARIAL_PEAK_LIMIT,
+        "peak {peak} bytes exceeds limit {ADVERSARIAL_PEAK_LIMIT}"
+    );
+}
+
+/// §9.20 — AuthInit with an enormous declared certificate length.
+///
+/// Discrimination: declared `u64::MAX`, element `u8` → naive_bytes = 1 MiB.
+/// Mirrors `bounded_bytes_enormous_declared_len_allocates_nothing_large`:
+/// when remaining input is shorter than the declaration, postcard fails
+/// before `visit_bytes`, yielding [`Error::MalformedWire`].
+#[test]
+fn auth_init_enormous_declared_certificate_len_allocates_nothing_large() {
+    assert_discrimination_margin(&ENORMOUS_VARINT, std::mem::size_of::<u8>());
+    let mut input = vec![0x01u8, 0x20];
+    input.extend_from_slice(&[0x11; 32]);
+    input.extend_from_slice(&ENORMOUS_VARINT);
+    input.push(0x00);
+    let (result, peak) = peak_alloc_of(|| AuthInit::from_bytes(&input));
+    assert_eq!(
+        result.expect_err("enormous certificate length must fail"),
+        Error::MalformedWire
     );
     assert!(
         peak <= ADVERSARIAL_PEAK_LIMIT,

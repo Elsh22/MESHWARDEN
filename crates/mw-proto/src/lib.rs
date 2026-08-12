@@ -8,6 +8,7 @@
 //! expose `to_bytes`/`from_bytes` backed by postcard.
 
 mod alg;
+mod auth;
 mod bounded;
 mod bounds;
 mod error;
@@ -16,9 +17,15 @@ mod hello;
 mod version;
 
 pub use alg::{alg_from_u16, alg_to_u16};
+pub use auth::{
+    AUTH_ROLE_CLIENT, AUTH_ROLE_SERVER, AUTH_TRANSCRIPT_DOMAIN_V1, AuthConfirm, AuthInit,
+    AuthResponse, AuthTranscriptV1, EXPORTER_LABEL_V1, WireSignature,
+};
 pub use bounded::{BoundedBytes, BoundedVec, decode_exact};
 pub use bounds::{
-    MAX_CERT_CAPABILITIES, MAX_CERTIFICATE_WIRE_BYTES, MAX_PUBLIC_KEY_BYTES, MAX_SIGNATURE_BYTES,
+    MAX_AUTH_CONFIRM_BYTES, MAX_AUTH_INIT_BYTES, MAX_AUTH_RESPONSE_BYTES,
+    MAX_AUTH_TRANSCRIPT_BYTES, MAX_CERT_CAPABILITIES, MAX_CERTIFICATE_WIRE_BYTES, MAX_HELLO_ALGS,
+    MAX_PROOF_SIGNATURES, MAX_PUBLIC_KEY_BYTES, MAX_SIGNATURE_BYTES,
 };
 pub use error::{Error, Result};
 pub use frame::{Frame, MAX_PAYLOAD_LEN, MessageType};

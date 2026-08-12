@@ -503,7 +503,7 @@ fn decode_exact_rejects_many_trailing_bytes_with_correct_count() {
 
 /// §10 test 17 — pins finding M-4: `Hello::from_bytes` is now strict and
 /// rejects trailing bytes. The chosen error is the typed
-/// `TrailingBytes` (generic decode failures keep `MalformedPayload`).
+/// `TrailingBytes` (generic decode failures are `MalformedWire`).
 #[test]
 fn hello_from_bytes_rejects_trailing_bytes() {
     // The golden Hello vector plus one trailing byte.

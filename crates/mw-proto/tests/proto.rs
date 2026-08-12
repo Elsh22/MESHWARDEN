@@ -191,9 +191,8 @@ fn decode_prefix_rejects_oversized_declaration_before_buffering() {
 
 #[test]
 fn hello_postcard_round_trip() {
-    let hello = Hello {
-        supported_algs: vec![AlgId::Ed25519, AlgId::X25519, AlgId::Sha256],
-    };
+    let hello =
+        Hello::from_algorithms(&[AlgId::Ed25519, AlgId::X25519, AlgId::Sha256]).expect("in bound");
     let bytes = hello.to_bytes().expect("to_bytes must succeed");
     let decoded = Hello::from_bytes(&bytes).expect("from_bytes must succeed");
     assert_eq!(decoded, hello);
@@ -203,23 +202,27 @@ fn hello_postcard_round_trip() {
 fn hello_from_bytes_rejects_garbage_without_panic() {
     let garbage: &[u8] = &[0xFF, 0xFE, 0xFD, 0xFC, 0xDE, 0xAD, 0xBE, 0xEF, 0x42, 0x00];
     let err = Hello::from_bytes(garbage).expect_err("garbage must be rejected");
-    assert_eq!(err, Error::MalformedPayload);
+    // Garbage may surface as BoundExceeded (declared count from the leading
+    // varint) or MalformedWire; never panics, never MalformedPayload.
+    assert!(
+        matches!(err, Error::BoundExceeded { .. } | Error::MalformedWire),
+        "unexpected error for garbage: {err:?}"
+    );
 }
 
 #[test]
 fn hello_shape_carries_alg_ids() {
-    let hello = Hello {
-        supported_algs: vec![AlgId::Ed25519, AlgId::Sha256],
-    };
-    assert_eq!(hello.supported_algs.len(), 2);
-    assert_eq!(alg_to_u16(hello.supported_algs[0]), 0x0001);
+    let hello = Hello::from_algorithms(&[AlgId::Ed25519, AlgId::Sha256]).expect("in bound");
+    assert_eq!(hello.algorithm_codes().len(), 2);
+    assert_eq!(hello.algorithm_codes()[0], 0x0001);
+    let known: Vec<_> = hello.known_algorithms().collect();
+    assert_eq!(known, vec![AlgId::Ed25519, AlgId::Sha256]);
 }
 
 #[test]
 fn hello_postcard_golden_vector_is_stable() {
-    let hello = Hello {
-        supported_algs: vec![AlgId::Ed25519, AlgId::X25519, AlgId::Sha256],
-    };
+    let hello =
+        Hello::from_algorithms(&[AlgId::Ed25519, AlgId::X25519, AlgId::Sha256]).expect("in bound");
     let bytes = hello.to_bytes().expect("to_bytes must succeed");
     assert_eq!(bytes, [0x03, 0x01, 0x02, 0x10]);
 }
