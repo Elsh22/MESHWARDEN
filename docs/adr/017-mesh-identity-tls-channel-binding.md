@@ -12,7 +12,7 @@
 | 2 | Post-review redraft: ADR-015 preservation, certificate wire format, negotiation removed, honest `Unauthenticated<S>` characterisation, manifest-level dependency gates |
 | 3 | Maintainer decisions on Q1–Q5 plus eight mandatory corrections: bounded types replacing fixed-size cryptographic arrays, signature lists, `auth_algorithm`, `AuthMachine`/driver split, single pre-authentication buffering rule, bounds-before-allocation obligation, message-code allocation |
 | **4** | **Corrected before first commit; no repository history affected.** (a) Algorithm-allocation wording: `0x0001`–`0x003F` is the current **block layout**, not the allocated set, and `MAX_CERT_CAPABILITIES = 64` is an **independent cardinality bound** with no relationship to the code space. (b) Added *Relationship to `WireVersion.major`*, clarifying the three version axes and deferring wire compatibility to ADR-015. **No normative security decision changed.** |
-| **5** | Six maintainer decisions recorded, 2026-08-10; **corrected before push; no shared history affected.** **Third and final correction before push.** **Normative content** — Amendment 1: scoped exception to algorithm-registry invariant 3 (capability codes descriptive, raw `u16`; normative home `docs/spec/algorithm-registry.md` §*Scope of invariant 3*); Amendment 4: certificate validation ordering with narrowed diagnostic claim (§*Certificate validation ordering*); Amendment 5: bounded-decode doctrine (§*Bounded-decode doctrine*, RSK-017-14); `AuthOutcome` carries raw capability codes with the same accessor discipline as `NodeCertificate` (§*Division of responsibility*); Hello's advertisement is descriptive under Amendment 1, with current reject-unknown decode recorded as a known inconsistency deferred with the rest of the `hello.rs` debt (§*Revisit triggers*). **Corrections changing no normative decision** — Amendment 2: `MAX_PUBLIC_KEY_BYTES = 256` and bound-constant ownership; Amendment 3: `mw-identity → mw-proto` crate edge; Amendment 6: deferred `Hello.supported_algs` bound (and, as corrected, the descriptive-decode and error-taxonomy items). **Corrections A–C (this correction, third and final before push)** — A: `NodeCertificate.public_key` recorded as pre-existing untagged crypto-bearing legacy with stop condition and well-formedness obligation (§*Legacy: `NodeCertificate.public_key` is untagged*, RSK-017-15); B: testing obligations — removed unimplementable "unknown public-key algorithm code" row; added subject-key well-formedness and `NodeId` textual canonicality rows (§*Testing obligations*); C: `certificate_signing_bytes` as a byte prefix of `certificate_wire_bytes` recorded as an encoding observation, not a contract (§*Certificate representations*). Follows Revision 4's precedent: corrected before entering shared history. |
+| **5** | Six maintainer decisions recorded, 2026-08-10; **corrected before push; no shared history affected.** **Final correction before push** — subsequent changes become **Revision 6**. **Normative content** — Amendment 1: scoped exception to algorithm-registry invariant 3 (capability codes descriptive, raw `u16`; normative home `docs/spec/algorithm-registry.md` §*Scope of invariant 3*); Amendment 4: certificate validation ordering with narrowed diagnostic claim (§*Certificate validation ordering*); Amendment 5: bounded-decode doctrine (§*Bounded-decode doctrine*, RSK-017-14); `AuthOutcome` carries raw capability codes with the same accessor discipline as `NodeCertificate` (§*Division of responsibility*); Hello's advertisement is descriptive under Amendment 1, with current reject-unknown decode recorded as a known inconsistency deferred with the rest of the `hello.rs` debt (§*Revisit triggers*). **Corrections changing no normative decision** — Amendment 2: `MAX_PUBLIC_KEY_BYTES = 256` and bound-constant ownership; Amendment 3: `mw-identity → mw-proto` crate edge; Amendment 6: deferred `Hello.supported_algs` bound (and, as corrected, the descriptive-decode and error-taxonomy items). **Corrections A–C** — A: `NodeCertificate.public_key` recorded as pre-existing untagged crypto-bearing legacy with stop condition and well-formedness obligation (§*Legacy: `NodeCertificate.public_key` is untagged*, RSK-017-15); B: testing obligations — removed unimplementable "unknown public-key algorithm code" row; added subject-key well-formedness and `NodeId` textual canonicality rows (§*Testing obligations*); C: `certificate_signing_bytes` as a byte prefix of `certificate_wire_bytes` recorded as an encoding observation, not a contract (§*Certificate representations*). **Doc-debt final (Debts 1–5, this correction)** — depth-aware violation-channel scoping pinned by nested-decode test (§*Bounded-decode doctrine*); complete-certificate decode precedence and re-encode canonicality proven by overlong-varint fixture (§*Certificate representations*); `BoundExceeded` cannot name the field — accepted v1 limitation (RSK-017-16); encode field-bounds-before-DTO ordering, `WireTooLarge` meaning, and encode/decode symmetry (§*Certificate representations*); `MAX_AUTH_TRANSCRIPT_BYTES` derivation recorded as unstated for the authentication-message slice (§*Pre-authentication resource bounds*, §*Revisit triggers*). Follows Revision 4's precedent: corrected before entering shared history. |
 
 - **Depends on:** ADR-008 (identity-bound capabilities), ADR-015 (postcard canonical encoding, as amended by Erratum 1), ADR-016 (pure-Rust rustls provider)
 - **Builds on:** commit `b1911bd` (certificate self-consistency)
@@ -159,6 +159,38 @@ coincidence into a contract and would fail on a future field addition for no sec
 3. **Sign the observed octets** — `AuthTranscriptV1` covers the **exact octets sent or
    received on the wire**, never a re-encoding. Both endpoints therefore agree on the signed
    bytes by construction.
+
+**Complete-certificate decode precedence is normative:** input length against
+`MAX_CERTIFICATE_WIRE_BYTES` before any parsing; then bounded decode with whole-input
+consumption; then canonical re-encoding comparison; then signature-algorithm resolution.
+Capability codes are never resolved at decode.
+
+Canonicality is enforced by that re-encode comparison and is proven by an overlong-varint
+byte fixture — postcard accepts the overlong encoding, so the re-encode comparison is the
+only thing that rejects it.
+
+### Encode ordering (normative, Rev 5)
+
+`to_wire_bytes` checks each field bound — capability count, public-key length, signature
+length — **before** constructing the wire representation or encoding anything. The
+total-size check against `MAX_CERTIFICATE_WIRE_BYTES` runs afterwards, on an encoding whose
+fields are all individually in bounds. **`WireTooLarge` therefore means only what it says**:
+the total encoding is too large, not that some field violated its own bound.
+
+**Ordering principle:** a bound is enforced where the information to name the violation
+exists. Checking a field bound by measuring a total requires reconstructing information that
+was already available and discards which field failed.
+
+**Encode/decode symmetry:** anything `to_wire_bytes` accepts, `from_wire_bytes` accepts.
+Pinned by tests at each field-bound edge.
+
+`WireTooLarge` is unreachable on the encode success path. With every field at its bound —
+34-byte node-id text for subject and issuer, `MAX_PUBLIC_KEY_BYTES` (256),
+`MAX_CERT_CAPABILITIES` (64) codes at three varint bytes each, maximal `u64` timestamps, and
+`MAX_SIGNATURE_BYTES` (128) — the worst-case encoding is approximately 674 bytes against a
+2048-byte bound. A certificate built with realistic capability codes measures 528 bytes. The
+check is retained as defense-in-depth against a future field, a raised field bound, or a
+lowered total bound.
 
 ### Capability bound
 
@@ -572,8 +604,17 @@ Before authentication the peer is unauthenticated. The general 16 MiB frame maxi
 | `MAX_AUTH_INIT_BYTES` | **4 096** |
 | `MAX_AUTH_RESPONSE_BYTES` | **4 096** |
 | `MAX_AUTH_CONFIRM_BYTES` | **1 024** |
-| `MAX_AUTH_TRANSCRIPT_BYTES` | **8 192** (derived) |
+| `MAX_AUTH_TRANSCRIPT_BYTES` | **8 192** (derived — derivation unstated; see note below) |
 | **`MAX_PREAUTH_UNPROCESSED_BYTES`** | **16 384** |
+
+**`MAX_AUTH_TRANSCRIPT_BYTES` derivation is unstated.** The constant is marked derived, but
+the arithmetic that produced 8 192 is not recorded here and is **not** computed by this
+revision. The authentication-message slice must compute the worst-case encoded size of
+`AuthTranscriptV1` from its field bounds and either confirm 8 192 or report measured
+evidence — never silently raise the bound. Motivating arithmetic only: two certificates at
+up to `MAX_CERTIFICATE_WIRE_BYTES` (2 048) each, plus the fixed and exact-length transcript
+fields, is roughly 4.3 KiB — comfortably under 8 192, but the margin is undocumented. See
+§*Revisit triggers*.
 
 ### The single buffering rule
 
@@ -643,6 +684,11 @@ implementation **must** satisfy all of:
   because postcard's error type discards custom serde error messages
   (`fn custom<T>(_msg: T) -> Self { Error::SerdeDeCustom }` on the pinned postcard
   **1.1.3**).
+- **Violation-channel scoping is depth-aware:** the outermost `decode_exact` owns the
+  channel, so a bound violation recorded at any nesting depth survives to the outermost
+  reader; inner scopes neither clear nor reset it. This is pinned by a nested-decode test
+  rather than by an assertion that nesting cannot occur — the mechanism is exercised, not
+  assumed absent.
 - **The violation channel must never be held across an `.await`.** `decode_exact` is
   synchronous and contains no await points, so this holds today by construction; a future
   caller that wrapped a decode in an async fn and yielded mid-decode could misattribute a
@@ -650,6 +696,10 @@ implementation **must** satisfy all of:
 - The channel makes the bounded-decode module **`std`-only**. ADR-015 notes postcard's
   `no_std`/`alloc` fit; if `mw-proto` ever needs `no_std`, this mechanism needs revisiting.
   Recorded as a known constraint, not a problem to solve now. See RSK-017-14.
+- **A decode-time bound violation cannot name the field that exceeded its bound, because
+  `mw_proto::Error::BoundExceeded` carries only the declared value and the maximum.**
+  Accepted v1 limitation (RSK-017-16), not a defect to fix. It applies to every bounded
+  field in every message; authentication messages inherit it.
 
 ---
 
@@ -984,6 +1034,7 @@ carries no version.
 | RSK-017-13 | `MAX_CERTIFICATE_WIRE_BYTES = 2048` is provisional | Accepted. Implementation must stop and report measured evidence if insufficient. |
 | RSK-017-14 | The bounded-decode violation channel is a thread-local: holding it across an `.await` would misattribute violations across tasks, and it makes the bounded-decode module `std`-only | Accepted. `decode_exact` is synchronous today; the never-across-`.await` rule is normative (Rev 5, §*Bounded-decode doctrine*) and binds the driver slice. `std`-only is a recorded constraint, revisited only if `no_std` is ever required. |
 | RSK-017-15 | `NodeCertificate.public_key` is an untagged crypto-bearing field; its algorithm is an implicit v1 Ed25519 assumption, not a wire fact | Accepted as pre-existing legacy (§*Legacy: `NodeCertificate.public_key` is untagged*). Mitigated in v1 by well-formedness checks in `sign` and `verify`. Adding a `public_key_algorithm` field is a separate coupled decision requiring its own ADR; never invent it on the wire alone. |
+| RSK-017-16 | A decode-time bound violation cannot name the field that exceeded its bound, because `mw_proto::Error::BoundExceeded` carries only the declared value and the maximum | Accepted v1 limitation (§*Bounded-decode doctrine*). Applies to every bounded field in every message, including authentication messages. Not a defect scheduled for repair in v1. |
 
 ---
 
@@ -1039,6 +1090,10 @@ Changing any of these invalidates this ADR:
   3. Split `UnknownAlgorithm` versus `MalformedPayload` in Hello's error taxonomy (already
      deferred from slice 1 / 1b).
   All three touch the same file; the authentication-message slice is the natural moment.
+- The authentication-message slice encodes `AuthTranscriptV1` → compute the worst-case
+  encoded size from its field bounds and either confirm `MAX_AUTH_TRANSCRIPT_BYTES = 8192`
+  or report measured evidence (§*Pre-authentication resource bounds*). The derivation is
+  unstated in this ADR; do not raise the bound without evidence.
 
 ---
 
