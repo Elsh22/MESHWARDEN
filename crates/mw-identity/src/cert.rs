@@ -15,7 +15,7 @@ use mw_proto::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, NodeId, Result};
+use crate::{CertificateWireField, Error, NodeId, Result};
 
 /// Maximum certificate lifetime in seconds: 8 hours.
 ///
@@ -163,6 +163,13 @@ fn check_capability_count(capabilities: &[u16]) -> Result<()> {
     Ok(())
 }
 
+fn check_wire_field_len(field: CertificateWireField, len: usize, max: usize) -> Result<()> {
+    if len > max {
+        return Err(Error::FieldBoundExceeded { field, len, max });
+    }
+    Ok(())
+}
+
 /// Validates that `public_key` is a well-formed Ed25519 public key.
 ///
 /// Implicit algorithm assumption (ADR-017 §*Legacy: `NodeCertificate.public_key`
@@ -301,33 +308,38 @@ impl NodeCertificate {
     /// Encodes the complete certificate for the wire (ADR-017
     /// §*Certificate representations*).
     ///
-    /// Constructs the private wire DTO from this certificate's fields and
-    /// postcard-encodes it. Rejects more than [`MAX_CERT_CAPABILITIES`]
-    /// capabilities with the same [`Error::TooManyCapabilities`] used by
-    /// [`sign`](Self::sign) / [`verify`](Self::verify). Rejects an encoding
-    /// longer than [`MAX_CERTIFICATE_WIRE_BYTES`] with
-    /// [`Error::WireTooLarge`].
+    /// Check order:
+    /// 1. field bounds (capability count, public-key length, signature length)
+    ///    — each names the failing field; no DTO construction or encoding yet;
+    /// 2. construct the private wire DTO;
+    /// 3. postcard-encode once;
+    /// 4. total-size check against [`MAX_CERTIFICATE_WIRE_BYTES`] →
+    ///    [`Error::WireTooLarge`].
+    ///
+    /// Step 4 is defense-in-depth: with every field individually in bounds the
+    /// worst-case encoding is ~674 bytes against 2048, so `WireTooLarge` is
+    /// unreachable on the success path today. The guard remains for a future
+    /// field, a raised field bound, or a lowered total bound.
+    ///
+    /// Capability count reuses [`Error::TooManyCapabilities`] from
+    /// [`sign`](Self::sign) / [`verify`](Self::verify).
     ///
     /// Does **not** validate the certificate: encoding is not verification.
     pub fn to_wire_bytes(&self) -> Result<Vec<u8>> {
         check_capability_count(&self.capabilities)?;
-        let dto = match Self::wire_dto_from_fields(self) {
-            Ok(dto) => dto,
-            Err(field_err) => {
-                // Prefer the certificate-budget error when the unbounded
-                // encoding would exceed MAX_CERTIFICATE_WIRE_BYTES — the same
-                // gate `from_wire_bytes` applies before parsing — so encode
-                // never produces bytes decode would refuse as WireTooLarge.
-                let unbounded = encode_certificate_wire_unbounded(self)?;
-                if unbounded.len() > MAX_CERTIFICATE_WIRE_BYTES {
-                    return Err(Error::WireTooLarge {
-                        len: unbounded.len(),
-                        max: MAX_CERTIFICATE_WIRE_BYTES,
-                    });
-                }
-                return Err(field_err);
-            }
-        };
+        check_wire_field_len(
+            CertificateWireField::PublicKey,
+            self.public_key.len(),
+            MAX_PUBLIC_KEY_BYTES,
+        )?;
+        check_wire_field_len(
+            CertificateWireField::Signature,
+            self.signature.bytes.len(),
+            MAX_SIGNATURE_BYTES,
+        )?;
+        // Step-1 bounds match the DTO type parameters, so the validating
+        // constructors below cannot fail for a bound reason.
+        let dto = Self::wire_dto_from_fields(self)?;
         let bytes = postcard::to_allocvec(&dto)?;
         if bytes.len() > MAX_CERTIFICATE_WIRE_BYTES {
             return Err(Error::WireTooLarge {
@@ -383,43 +395,45 @@ impl NodeCertificate {
         })
     }
 
+    /// Builds the wire DTO after field bounds have already been checked.
+    ///
+    /// Maps any residual `BoundExceeded` from the validating constructors to
+    /// the named encode-time variants. That path is unreachable when the
+    /// step-1 checks and the DTO type parameters agree; a failure here would
+    /// mean those bounds have drifted.
     fn wire_dto_from_fields(cert: &Self) -> Result<CertificateWire> {
+        let public_key = BoundedBytes::from_slice(&cert.public_key).map_err(|e| match e {
+            mw_proto::Error::BoundExceeded { declared, max } => Error::FieldBoundExceeded {
+                field: CertificateWireField::PublicKey,
+                len: declared,
+                max,
+            },
+            other => Error::Wire(other),
+        })?;
+        let capabilities = BoundedVec::new(cert.capabilities.clone()).map_err(|e| match e {
+            mw_proto::Error::BoundExceeded { declared, max } => Error::TooManyCapabilities {
+                count: declared,
+                max,
+            },
+            other => Error::Wire(other),
+        })?;
+        let signature = BoundedBytes::from_slice(&cert.signature.bytes).map_err(|e| match e {
+            mw_proto::Error::BoundExceeded { declared, max } => Error::FieldBoundExceeded {
+                field: CertificateWireField::Signature,
+                len: declared,
+                max,
+            },
+            other => Error::Wire(other),
+        })?;
         Ok(CertificateWire {
             subject: cert.subject,
-            public_key: BoundedBytes::from_slice(&cert.public_key)?,
-            capabilities: BoundedVec::new(cert.capabilities.clone())?,
+            public_key,
+            capabilities,
             valid_from: cert.valid_from,
             valid_until: cert.valid_until,
             issuer: cert.issuer,
             signature_algorithm: cert.signature.alg.as_u16(),
-            signature: BoundedBytes::from_slice(&cert.signature.bytes)?,
+            signature,
         })
     }
-}
-
-/// Postcard encoding byte-identical to [`CertificateWire`], using plain
-/// slices so a certificate whose fields exceed per-field bounds can still be
-/// measured against [`MAX_CERTIFICATE_WIRE_BYTES`] for [`Error::WireTooLarge`].
-fn encode_certificate_wire_unbounded(cert: &NodeCertificate) -> Result<Vec<u8>> {
-    #[derive(Serialize)]
-    struct Encode<'a> {
-        subject: &'a NodeId,
-        public_key: &'a [u8],
-        capabilities: &'a [u16],
-        valid_from: u64,
-        valid_until: u64,
-        issuer: &'a NodeId,
-        signature_algorithm: u16,
-        signature: &'a [u8],
-    }
-    Ok(postcard::to_allocvec(&Encode {
-        subject: &cert.subject,
-        public_key: &cert.public_key,
-        capabilities: &cert.capabilities,
-        valid_from: cert.valid_from,
-        valid_until: cert.valid_until,
-        issuer: &cert.issuer,
-        signature_algorithm: cert.signature.alg.as_u16(),
-        signature: &cert.signature.bytes,
-    })?)
 }

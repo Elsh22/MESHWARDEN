@@ -14,8 +14,9 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use mw_identity::{Error, NodeCertificate, NodeId};
-use mw_proto::MAX_CERT_CAPABILITIES;
+use mw_crypto::{AlgId, Signature};
+use mw_identity::{CertificateWireField, Error, NodeCertificate, NodeId};
+use mw_proto::{MAX_CERT_CAPABILITIES, MAX_PUBLIC_KEY_BYTES};
 
 // ---------------------------------------------------------------------------
 // Counting allocator (duplicated from mw-proto/tests/allocation.rs)
@@ -281,4 +282,57 @@ fn enormous_declared_subject_string_length_allocates_nothing_large() {
         declared_count_from_fixture(&ENORMOUS_VARINT),
         peak
     );
+}
+
+#[test]
+fn to_wire_bytes_megabyte_public_key_allocates_no_encoding() {
+    // The deleted unbounded-encode preference arm would postcard-encode the
+    // out-of-bound public_key (~1 MiB) before returning WireTooLarge. Field
+    // checks reject without constructing a DTO or encoding.
+    let subject = NodeId::from_public_key_bytes(&[0x11u8; 32]);
+    let issuer = NodeId::from_public_key_bytes(&[0x22u8; 32]);
+    // Allocate the oversized field outside the measurement window.
+    let cert = NodeCertificate {
+        subject,
+        public_key: vec![0x11u8; 1024 * 1024],
+        capabilities: vec![AlgId::Ed25519.as_u16()],
+        valid_from: 1_000,
+        valid_until: 2_000,
+        issuer,
+        signature: Signature {
+            alg: AlgId::Ed25519,
+            bytes: vec![0xABu8; 64],
+        },
+    };
+    // Declared size read from the certificate — never restated below.
+    let declared = cert.public_key.len();
+    assert!(
+        declared > MAX_PUBLIC_KEY_BYTES,
+        "fixture must be over the public_key bound"
+    );
+    let need = 2 * ADVERSARIAL_PEAK_LIMIT;
+    assert!(
+        declared >= need,
+        "discrimination margin failed: declared {declared}, need >= {need}"
+    );
+
+    let (result, peak) = peak_alloc_of(|| cert.to_wire_bytes());
+    let err = result.expect_err("1 MiB public_key must fail encode");
+    assert!(
+        matches!(
+            err,
+            Error::FieldBoundExceeded {
+                field: CertificateWireField::PublicKey,
+                len,
+                max: MAX_PUBLIC_KEY_BYTES,
+            } if len == declared
+        ),
+        "expected FieldBoundExceeded(PublicKey), got {err:?}"
+    );
+    assert!(
+        peak <= ADVERSARIAL_PEAK_LIMIT,
+        "peak {peak} bytes exceeds limit {ADVERSARIAL_PEAK_LIMIT}; \
+         encode may have materialised the out-of-bound field"
+    );
+    eprintln!("alloc_case=to_wire_public_key declared={declared} esz=1 peak={peak} err={err:?}");
 }

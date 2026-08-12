@@ -13,7 +13,8 @@
 use mw_crypto::ed25519::PublicKey;
 use mw_crypto::{AlgId, Signature};
 use mw_identity::{
-    CertificateFields, Error, Keystore, MAX_CERT_LIFETIME_SECS, NodeCertificate, NodeId,
+    CertificateFields, CertificateWireField, Error, Keystore, MAX_CERT_LIFETIME_SECS,
+    NodeCertificate, NodeId,
 };
 use mw_proto::{
     MAX_CERT_CAPABILITIES, MAX_CERTIFICATE_WIRE_BYTES, MAX_PUBLIC_KEY_BYTES, MAX_SIGNATURE_BYTES,
@@ -390,8 +391,10 @@ fn to_wire_bytes_rejects_oversize_encoding_and_too_many_capabilities() {
         "{err:?}"
     );
 
-    // Encoding that exceeds MAX_CERTIFICATE_WIRE_BYTES (public_key large enough
-    // that the unbounded postcard form clears the certificate budget).
+    // Previously asserted WireTooLarge for a 2000-byte public_key via the
+    // deleted unbounded-encode preference arm — that pinned the defect
+    // (field-bound violation misreported as a total-size error). Field-bound
+    // error is the correct outcome.
     let oversize_pk = NodeCertificate {
         subject,
         public_key: vec![0x11u8; 2_000],
@@ -406,17 +409,189 @@ fn to_wire_bytes_rejects_oversize_encoding_and_too_many_capabilities() {
     };
     let err = oversize_pk
         .to_wire_bytes()
-        .expect_err("2000-byte public_key encoding must exceed wire budget");
+        .expect_err("2000-byte public_key must fail as a field bound");
     assert!(
         matches!(
             err,
-            Error::WireTooLarge {
-                max: MAX_CERTIFICATE_WIRE_BYTES,
-                ..
+            Error::FieldBoundExceeded {
+                field: CertificateWireField::PublicKey,
+                len: 2_000,
+                max: MAX_PUBLIC_KEY_BYTES,
             }
         ),
-        "expected WireTooLarge, got {err:?}"
+        "expected FieldBoundExceeded(PublicKey), got {err:?}"
     );
+}
+
+#[test]
+fn to_wire_bytes_rejects_300_byte_public_key_as_field_bound() {
+    // Over the 256-byte field bound; total encoding far under 2048.
+    let (subject, _, issuer) = golden_fields();
+    let cert = NodeCertificate {
+        subject,
+        public_key: vec![0x11u8; 300],
+        capabilities: vec![AlgId::Ed25519.as_u16()],
+        valid_from: 1_000,
+        valid_until: 2_000,
+        issuer,
+        signature: Signature {
+            alg: AlgId::Ed25519,
+            bytes: vec![0xABu8; 64],
+        },
+    };
+    let err = cert
+        .to_wire_bytes()
+        .expect_err("300-byte public_key must fail");
+    assert!(
+        matches!(
+            err,
+            Error::FieldBoundExceeded {
+                field: CertificateWireField::PublicKey,
+                len: 300,
+                max: MAX_PUBLIC_KEY_BYTES,
+            }
+        ),
+        "expected FieldBoundExceeded(PublicKey), got {err:?}"
+    );
+}
+
+#[test]
+fn to_wire_bytes_rejects_2000_byte_public_key_as_field_bound() {
+    // The case the preference arm previously answered with a false WireTooLarge.
+    let (subject, _, issuer) = golden_fields();
+    let cert = NodeCertificate {
+        subject,
+        public_key: vec![0x11u8; 2_000],
+        capabilities: vec![AlgId::Ed25519.as_u16()],
+        valid_from: 1_000,
+        valid_until: 2_000,
+        issuer,
+        signature: Signature {
+            alg: AlgId::Ed25519,
+            bytes: vec![0xABu8; 64],
+        },
+    };
+    let err = cert
+        .to_wire_bytes()
+        .expect_err("2000-byte public_key must fail as field bound");
+    assert!(
+        matches!(
+            err,
+            Error::FieldBoundExceeded {
+                field: CertificateWireField::PublicKey,
+                len: 2_000,
+                max: MAX_PUBLIC_KEY_BYTES,
+            }
+        ),
+        "expected FieldBoundExceeded(PublicKey), not WireTooLarge, got {err:?}"
+    );
+}
+
+#[test]
+fn to_wire_bytes_rejects_overlong_signature_as_field_bound() {
+    let (subject, public_key, issuer) = golden_fields();
+    let len = MAX_SIGNATURE_BYTES + 1;
+    let cert = NodeCertificate {
+        subject,
+        public_key,
+        capabilities: vec![AlgId::Ed25519.as_u16()],
+        valid_from: 1_000,
+        valid_until: 2_000,
+        issuer,
+        signature: Signature {
+            alg: AlgId::Ed25519,
+            bytes: vec![0xABu8; len],
+        },
+    };
+    let err = cert
+        .to_wire_bytes()
+        .expect_err("overlong signature must fail");
+    assert!(
+        matches!(
+            err,
+            Error::FieldBoundExceeded {
+                field: CertificateWireField::Signature,
+                len: l,
+                max: MAX_SIGNATURE_BYTES,
+            } if l == len
+        ),
+        "expected FieldBoundExceeded(Signature), got {err:?}"
+    );
+}
+
+#[test]
+fn to_wire_bytes_encode_decode_symmetry_at_field_bound_edges() {
+    let (subject, _, issuer) = golden_fields();
+
+    let at_pk = NodeCertificate {
+        subject,
+        public_key: vec![0x11u8; MAX_PUBLIC_KEY_BYTES],
+        capabilities: vec![AlgId::Ed25519.as_u16()],
+        valid_from: 1_000,
+        valid_until: 2_000,
+        issuer,
+        signature: Signature {
+            alg: AlgId::Ed25519,
+            bytes: vec![0xABu8; 64],
+        },
+    };
+    let bytes = at_pk.to_wire_bytes().expect("max public_key must encode");
+    NodeCertificate::from_wire_bytes(&bytes).expect("max public_key wire must decode");
+
+    let at_sig = NodeCertificate {
+        subject,
+        public_key: vec![0x11u8; 32],
+        capabilities: vec![AlgId::Ed25519.as_u16()],
+        valid_from: 1_000,
+        valid_until: 2_000,
+        issuer,
+        signature: Signature {
+            alg: AlgId::Ed25519,
+            bytes: vec![0xABu8; MAX_SIGNATURE_BYTES],
+        },
+    };
+    let bytes = at_sig.to_wire_bytes().expect("max signature must encode");
+    NodeCertificate::from_wire_bytes(&bytes).expect("max signature wire must decode");
+
+    let at_caps = NodeCertificate {
+        subject,
+        public_key: vec![0x11u8; 32],
+        capabilities: vec![AlgId::Ed25519.as_u16(); MAX_CERT_CAPABILITIES],
+        valid_from: 1_000,
+        valid_until: 2_000,
+        issuer,
+        signature: Signature {
+            alg: AlgId::Ed25519,
+            bytes: vec![0xABu8; 64],
+        },
+    };
+    let bytes = at_caps
+        .to_wire_bytes()
+        .expect("max capabilities must encode");
+    NodeCertificate::from_wire_bytes(&bytes).expect("max capabilities wire must decode");
+
+    let all_max = NodeCertificate {
+        subject,
+        public_key: vec![0x11u8; MAX_PUBLIC_KEY_BYTES],
+        capabilities: vec![AlgId::Ed25519.as_u16(); MAX_CERT_CAPABILITIES],
+        valid_from: 1_000,
+        valid_until: 2_000,
+        issuer,
+        signature: Signature {
+            alg: AlgId::Ed25519,
+            bytes: vec![0xABu8; MAX_SIGNATURE_BYTES],
+        },
+    };
+    let bytes = all_max
+        .to_wire_bytes()
+        .expect("all field bounds at maximum must encode");
+    let measured = bytes.len();
+    assert!(
+        measured <= MAX_CERTIFICATE_WIRE_BYTES,
+        "all-max encoding {measured} exceeds {MAX_CERTIFICATE_WIRE_BYTES}"
+    );
+    eprintln!("measured_all_max_wire_bytes={measured}");
+    NodeCertificate::from_wire_bytes(&bytes).expect("all-max wire must decode");
 }
 
 // ---------------------------------------------------------------------------

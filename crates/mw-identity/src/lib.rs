@@ -17,6 +17,25 @@ pub use cert::{CertificateFields, MAX_CERT_LIFETIME_SECS, NodeCertificate};
 pub use keystore::Keystore;
 pub use node_id::NodeId;
 
+/// Wire-field identity for encode-time bound violations on a complete
+/// certificate (`NodeCertificate::to_wire_bytes`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CertificateWireField {
+    /// `public_key` length against [`mw_proto::MAX_PUBLIC_KEY_BYTES`].
+    PublicKey,
+    /// `signature` byte length against [`mw_proto::MAX_SIGNATURE_BYTES`].
+    Signature,
+}
+
+impl core::fmt::Display for CertificateWireField {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::PublicKey => "public_key",
+            Self::Signature => "signature",
+        })
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// `now` precedes the certificate's `valid_from`.
@@ -49,6 +68,17 @@ pub enum Error {
     /// ADR-017: more than [`mw_proto::MAX_CERT_CAPABILITIES`] capability codes.
     #[error("certificate has {count} capabilities; maximum is {max}")]
     TooManyCapabilities { count: usize, max: usize },
+    /// A variable-length certificate wire field exceeds its bound.
+    ///
+    /// Raised by encode-time field checks in
+    /// [`NodeCertificate::to_wire_bytes`] before any DTO construction or
+    /// postcard encoding, so the failing field is named.
+    #[error("certificate wire field {field} is {len} bytes; maximum is {max}")]
+    FieldBoundExceeded {
+        field: CertificateWireField,
+        len: usize,
+        max: usize,
+    },
     /// Subject `public_key` is not a well-formed Ed25519 public key.
     ///
     /// Implicit algorithm assumption: ADR-017 §*Legacy: `NodeCertificate.public_key`
