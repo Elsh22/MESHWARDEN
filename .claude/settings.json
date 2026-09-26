@@ -1,0 +1,87 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build *)",
+      "Bash(cargo test *)",
+      "Bash(cargo check *)",
+      "Bash(cargo fmt *)",
+      "Bash(cargo tree *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo deny *)",
+      "Bash(cargo metadata *)",
+      "Bash(bash xtask/*)",
+      "Bash(git status *)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git diff)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git rev-parse *)",
+      "Bash(git ls-files *)",
+      "Bash(git add *)",
+      "Bash(git commit -F *)",
+      "Bash(git restore *)",
+      "Bash(rg *)",
+      "Bash(grep *)",
+      "Bash(ls *)",
+      "Bash(wc *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(chmod +x xtask/*)"
+    ],
+    "deny": [
+      "Bash(git push *)",
+      "Bash(git push)",
+      "Bash(git commit --amend *)",
+      "Bash(git reset *)",
+      "Bash(git rebase *)",
+      "Bash(git checkout *)",
+      "Bash(git clean *)",
+      "Bash(git stash *)",
+      "Bash(cargo publish *)",
+      "Bash(cargo install *)",
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "Bash(rm -rf *)",
+      "Edit(docs/adr/**)",
+      "Edit(docs/spec/**)",
+      "Edit(.claude/settings.json)",
+      "Edit(.claude/settings.local.json)",
+      "Edit(.claude/hooks/**)",
+      "Edit(.claude/agents/**)",
+      "Edit(.claude/skills/**)",
+      "Edit(.claude/loop/PROCEDURE.md)",
+      "Edit(.cursor/**)",
+      "Edit(CLAUDE.md)",
+      "Edit(deny.toml)",
+      "Edit(rust-toolchain.toml)",
+      "Edit(xtask/gate.sh)",
+      "Edit(xtask/check-crypto-boundary.sh)",
+      "Edit(scripts/**)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/session-context.sh"] }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          { "type": "command", "command": "bash", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-paths.sh"] }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/loop-gate.sh"], "timeout": 1800, "statusMessage": "Running MESHWARDEN gate" }
+        ]
+      }
+    ]
+  }
+}

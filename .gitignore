@@ -3,3 +3,10 @@
 
 # Cargo.lock stays TRACKED: the workspace produces binaries and reproducible
 # builds are a supply-chain control. Do not add it here.
+
+# Claude Code loop runtime state (the queue and run reports stay tracked)
+.claude/loop/STATUS
+.claude/loop/.stop_blocks
+.claude/loop/BLOCKED.md
+.claude/loop/runs/iter-*
+.claude/settings.local.json
