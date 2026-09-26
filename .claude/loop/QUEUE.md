@@ -1,6 +1,6 @@
 # MESHWARDEN autonomous queue
 
-Base: b65b39f (repair slice) plus the harness commit. ADR-017 Revision 6.
+Base: 09dfd51. Harness commit 385188a, then workspace cargo fmt 09dfd51, which already fixed the fmt drift, so T0 skips its devcert formatting step and records that. The musl gate step is skipped locally (MW_SKIP_MUSL=1) because macOS cannot link the Linux musl target; it runs on Linux later. ADR-017 Revision 6.
 
 ## Decisions in force (maintainer-confirmed)
 - Slice numbering: bounded decode = 1/1b, certificates = 2a/2b, auth wire
