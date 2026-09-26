@@ -26,8 +26,17 @@ allow = [
 
 [advisories]
 version = 2
-ignore = []
+ignore = [
+    { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.102.8 comes only from rustls-rustcrypto 0.0.2-alpha, which uses it solely for alg_id constants. Path validation, name constraints and CRL parsing are never called through it; rustls itself uses webpki 0.103.13. Revisit with the ADR-016 provider review." },
+    { id = "RUSTSEC-2026-0099", reason = "Same as RUSTSEC-2026-0098: webpki 0.102.8 is only used for alg_id constants." },
+    { id = "RUSTSEC-2026-0104", reason = "CRL parsing in webpki 0.102.8 is never reached; MESHWARDEN does not use CRLs and rustls-rustcrypto only uses alg_id constants." },
+    { id = "RUSTSEC-2023-0071", reason = "Marvin timing attack needs RSA private-key operations. No RSA private key is ever loaded: node identity is Ed25519 and the dev cert is P-256." },
+    { id = "RUSTSEC-2024-0436", reason = "paste is an unmaintained compile-time proc macro pulled in by rustls-rustcrypto; no runtime exposure." },
+]
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+
+[licenses.private]
+ignore = true

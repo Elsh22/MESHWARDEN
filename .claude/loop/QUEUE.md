@@ -192,6 +192,7 @@ Base: 09dfd51. Harness commit 385188a, then workspace cargo fmt 09dfd51, which a
      machine-owns-certificate-errors decision; the exporter return type chosen
      in T8; any flagged choices from SLICE-4-REPORT.md.
   3. Slice 5 prerequisites checklist.
+  4. ADR-016 provider risk: rustls-rustcrypto 0.0.2-alpha has had no release since April 2024 and pins rustls-webpki 0.102.8 and rsa. Their advisories are ignored in deny.toml with reachability reasons. List the options for replacing the provider and what each would need in ADR-016.
   Then write BLOCKED to STATUS with "Maintainer decision required before
   Slice 5" in BLOCKED.md.
   Commit: docs(loop): decision memo for Slice 5 prerequisites
