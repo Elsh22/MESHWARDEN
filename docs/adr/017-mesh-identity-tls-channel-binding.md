@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-07
-- **Revision:** 5
+- **Revision:** 6
 
 ### Revision history
 
@@ -13,6 +13,7 @@
 | 3 | Maintainer decisions on Q1–Q5 plus eight mandatory corrections: bounded types replacing fixed-size cryptographic arrays, signature lists, `auth_algorithm`, `AuthMachine`/driver split, single pre-authentication buffering rule, bounds-before-allocation obligation, message-code allocation |
 | **4** | **Corrected before first commit; no repository history affected.** (a) Algorithm-allocation wording: `0x0001`–`0x003F` is the current **block layout**, not the allocated set, and `MAX_CERT_CAPABILITIES = 64` is an **independent cardinality bound** with no relationship to the code space. (b) Added *Relationship to `WireVersion.major`*, clarifying the three version axes and deferring wire compatibility to ADR-015. **No normative security decision changed.** |
 | **5** | Six maintainer decisions recorded, 2026-08-10; **corrected before push; no shared history affected.** **Final correction before push** — subsequent changes become **Revision 6**. **Normative content** — Amendment 1: scoped exception to algorithm-registry invariant 3 (capability codes descriptive, raw `u16`; normative home `docs/spec/algorithm-registry.md` §*Scope of invariant 3*); Amendment 4: certificate validation ordering with narrowed diagnostic claim (§*Certificate validation ordering*); Amendment 5: bounded-decode doctrine (§*Bounded-decode doctrine*, RSK-017-14); `AuthOutcome` carries raw capability codes with the same accessor discipline as `NodeCertificate` (§*Division of responsibility*); Hello's advertisement is descriptive under Amendment 1, with current reject-unknown decode recorded as a known inconsistency deferred with the rest of the `hello.rs` debt (§*Revisit triggers*). **Corrections changing no normative decision** — Amendment 2: `MAX_PUBLIC_KEY_BYTES = 256` and bound-constant ownership; Amendment 3: `mw-identity → mw-proto` crate edge; Amendment 6: deferred `Hello.supported_algs` bound (and, as corrected, the descriptive-decode and error-taxonomy items). **Corrections A–C** — A: `NodeCertificate.public_key` recorded as pre-existing untagged crypto-bearing legacy with stop condition and well-formedness obligation (§*Legacy: `NodeCertificate.public_key` is untagged*, RSK-017-15); B: testing obligations — removed unimplementable "unknown public-key algorithm code" row; added subject-key well-formedness and `NodeId` textual canonicality rows (§*Testing obligations*); C: `certificate_signing_bytes` as a byte prefix of `certificate_wire_bytes` recorded as an encoding observation, not a contract (§*Certificate representations*). **Doc-debt final (Debts 1–5, this correction)** — depth-aware violation-channel scoping pinned by nested-decode test (§*Bounded-decode doctrine*); complete-certificate decode precedence and re-encode canonicality proven by overlong-varint fixture (§*Certificate representations*); `BoundExceeded` cannot name the field — accepted v1 limitation (RSK-017-16); encode field-bounds-before-DTO ordering, `WireTooLarge` meaning, and encode/decode symmetry (§*Certificate representations*); `MAX_AUTH_TRANSCRIPT_BYTES` derivation recorded as unstated for the authentication-message slice (§*Pre-authentication resource bounds*, §*Revisit triggers*). Follows Revision 4's precedent: corrected before entering shared history. |
+| **6** | **2026-09-25. Enters shared history** — Revisions 4 and 5 were corrected before push. Records Slice 3 measured evidence from commit `e5a5501`: `AuthTranscriptV1` worst-case postcard encoding is 4293 bytes and `MAX_AUTH_TRANSCRIPT_BYTES` stays 8 192; `MAX_HELLO_ALGS = 64`. Closes the Revision 5 deferred `hello.rs` items (§*Revisit triggers*). **No normative security decision changed.** |
 
 - **Depends on:** ADR-008 (identity-bound capabilities), ADR-015 (postcard canonical encoding, as amended by Erratum 1), ADR-016 (pure-Rust rustls provider)
 - **Builds on:** commit `b1911bd` (certificate self-consistency)
@@ -359,13 +360,11 @@ rejection.
 
 `Hello.supported_algs` is also descriptive: §*Authoritative source* already states Hello's
 advertisement is **advisory — usable for routing and diagnostics, never for a security
-decision.** Under Amendment 1 it therefore belongs on the descriptive side, and unknown
-codes should be carried, not fatal. The current decode path maps any unknown code to an
-error and rejects the entire message — **inconsistent with Amendment 1**, recorded here as a
-known inconsistency rather than an oversight. Changing it is a **wire behavior change**
-(input previously rejected becomes accepted) and is deferred to the `mw-proto`
-authentication-message slice together with the rest of the `hello.rs` debt; see §*Revisit
-triggers*.
+decision.** Under Amendment 1 it belongs on the descriptive side. As of commit `e5a5501`,
+`Hello::from_bytes` carries unknown codes non-fatally. That acceptance is a deliberate wire
+behavior change, and it landed in the authentication-message slice where Revision 5 required
+it (§*Revisit triggers*). `WireSignature.algorithm` stays acted-upon: an unknown code there
+is still a typed rejection.
 
 ---
 
@@ -604,17 +603,31 @@ Before authentication the peer is unauthenticated. The general 16 MiB frame maxi
 | `MAX_AUTH_INIT_BYTES` | **4 096** |
 | `MAX_AUTH_RESPONSE_BYTES` | **4 096** |
 | `MAX_AUTH_CONFIRM_BYTES` | **1 024** |
-| `MAX_AUTH_TRANSCRIPT_BYTES` | **8 192** (derived — derivation unstated; see note below) |
+| `MAX_AUTH_TRANSCRIPT_BYTES` | **8 192** (derived; worst case 4293 bytes; see note below) |
 | **`MAX_PREAUTH_UNPROCESSED_BYTES`** | **16 384** |
 
-**`MAX_AUTH_TRANSCRIPT_BYTES` derivation is unstated.** The constant is marked derived, but
-the arithmetic that produced 8 192 is not recorded here and is **not** computed by this
-revision. The authentication-message slice must compute the worst-case encoded size of
-`AuthTranscriptV1` from its field bounds and either confirm 8 192 or report measured
-evidence — never silently raise the bound. Motivating arithmetic only: two certificates at
-up to `MAX_CERTIFICATE_WIRE_BYTES` (2 048) each, plus the fixed and exact-length transcript
-fields, is roughly 4.3 KiB — comfortably under 8 192, but the margin is undocumented. See
-§*Revisit triggers*.
+**`MAX_AUTH_TRANSCRIPT_BYTES` derivation (Revision 6).** Commit `e5a5501` measured the
+postcard encoding of `AuthTranscriptV1` (varint length prefix on each byte field, varint
+`u16`, raw `u8`). `auth_transcript_worst_case_fits_max_auth_transcript_bytes` pins that
+encoding at 4293 bytes. The specified constant stays **8 192**: retained as specified, not
+tightened and not raised. Margin: `8192 - 4293 = 3899` bytes.
+
+| Field | Worst-case bytes |
+|---|---|
+| `domain` | 1 (length) + 16 = 17 |
+| `auth_version` | 3 (varint of `u16::MAX`) |
+| `auth_algorithm` | 3 (varint of `u16::MAX`) |
+| `role` | 1 |
+| `channel_binding` | 1 + 32 = 33 |
+| client and server node id | 2 x (1 + 34) = 70 |
+| client and server nonce | 2 x (1 + 32) = 66 |
+| client and server certificate | 2 x (2 + 2048) = 4100 (2048 needs a 2-byte varint) |
+| **Total** | **4293** |
+
+The pinning test uses `u16::MAX` for `auth_version` and `auth_algorithm`, so 4293 is an
+upper bound over all values of those fields. Real v1 values encode smaller. The certificate
+term dominates (4100 of 4293). Any change to `MAX_CERTIFICATE_WIRE_BYTES` requires
+re-deriving this total (§*Revisit triggers*).
 
 ### The single buffering rule
 
@@ -638,9 +651,17 @@ Recorded by maintainer decision; corrections that change no normative security d
   correctness check.
 - `MAX_SIGNATURE_BYTES = 128` applies to **certificate signature bytes as well as proof
   signatures** — one constant, one meaning.
-- All four bound constants defined so far (`MAX_CERTIFICATE_WIRE_BYTES`,
-  `MAX_CERT_CAPABILITIES`, `MAX_SIGNATURE_BYTES`, `MAX_PUBLIC_KEY_BYTES`) are **owned by
-  `mw-proto`** (`crates/mw-proto/src/bounds.rs`), alongside `BoundedBytes` / `BoundedVec`.
+- The bound constants owned by `mw-proto` (`crates/mw-proto/src/bounds.rs`), alongside
+  `BoundedBytes` / `BoundedVec`, are: `MAX_CERTIFICATE_WIRE_BYTES` (2 048),
+  `MAX_CERT_CAPABILITIES` (64), `MAX_SIGNATURE_BYTES` (128), `MAX_PUBLIC_KEY_BYTES` (256),
+  `MAX_PROOF_SIGNATURES` (4), `MAX_AUTH_INIT_BYTES` (4 096), `MAX_AUTH_RESPONSE_BYTES`
+  (4 096), `MAX_AUTH_CONFIRM_BYTES` (1 024), `MAX_AUTH_TRANSCRIPT_BYTES` (8 192), and
+  `MAX_HELLO_ALGS` (64).
+- `MAX_HELLO_ALGS = 64` bounds `Hello.supported_algs`. Hello advertisement is descriptive
+  (Amendment 1). Certificate capabilities are attested and identity-bound (ADR-008). Both
+  constants use cardinality 64, the same anti-DoS profile on a postcard sequence of
+  registry `u16` codes, and are deliberately not aliased: the quantities are different and
+  may diverge.
 - Honest sizing rationale: nothing in the current registry needs more than 32 bytes of
   public key or 64 of signature; every post-quantum candidate exceeds the 2 048-byte
   certificate bound anyway, so a PQC migration bumps this entire constant family together
@@ -1076,24 +1097,34 @@ Changing any of these invalidates this ADR:
 - Post-quantum signature migration begins → the tagged signature list and versioned
   transcript should absorb it.
 - An audit subsystem exists → add local audit events at the listed failure points.
+- Any change to `MAX_CERTIFICATE_WIRE_BYTES` requires re-deriving the `AuthTranscriptV1`
+  worst case and updating the pinned 4293 (§*Pre-authentication resource bounds*).
+
+### Resolved triggers
+
+Closed by commit `e5a5501` (Revision 6). The Revision 5 triggers are kept here with their
+resolutions.
+
 - The `mw-proto` authentication-message slice allocates its message bounds → land the three
   deferred `hello.rs` items as **one** change (Rev 5):
-  1. Allocate a normative `Hello.supported_algs` maximum. The field currently has **no
-     normative maximum**; inventing one was **explicitly deferred by maintainer decision**,
-     not overlooked, and its decode path is non-preallocating in the interim (growth comes
-     only from bytes actually present). Allocating the constant is a prerequisite for
-     bounding the field.
+  1. Allocate a normative `Hello.supported_algs` maximum. **Resolved in `e5a5501`:**
+     `MAX_HELLO_ALGS = 64` in `crates/mw-proto/src/bounds.rs` (§*Bound-constant ownership
+     and sizing*).
   2. Align Hello decode with Amendment 1's descriptive policy: unknown advertisement codes
-     are carried, not fatal. The current reject-unknown behavior is a **known inconsistency**
-     with Amendment 1 (§*Descriptive capability codes*); fixing it is a wire behavior change
-     and must not land earlier.
+     are carried, not fatal. **Resolved in `e5a5501`:** `Hello::from_bytes` carries unknown
+     codes. That was the deliberate wire behavior change Revision 5 required to land in this
+     slice (§*Descriptive capability codes*). `WireSignature.algorithm` remains a typed
+     rejection for an unknown code.
   3. Split `UnknownAlgorithm` versus `MalformedPayload` in Hello's error taxonomy (already
-     deferred from slice 1 / 1b).
-  All three touch the same file; the authentication-message slice is the natural moment.
+     deferred from slice 1 / 1b). **Resolved by supersession in `e5a5501`:** item 2 removed
+     the only case that needed the split. Hello decode has no `Error::UnknownAlgorithm`
+     path. `Hello::from_bytes` returns `Error::TrailingBytes`, `Error::BoundExceeded`, or
+     `Error::MalformedWire`.
 - The authentication-message slice encodes `AuthTranscriptV1` → compute the worst-case
   encoded size from its field bounds and either confirm `MAX_AUTH_TRANSCRIPT_BYTES = 8192`
-  or report measured evidence (§*Pre-authentication resource bounds*). The derivation is
-  unstated in this ADR; do not raise the bound without evidence.
+  or report measured evidence (§*Pre-authentication resource bounds*). **Resolved in
+  `e5a5501`:** the measured worst case is 4293 bytes. 8 192 is retained. Pinned by
+  `auth_transcript_worst_case_fits_max_auth_transcript_bytes`.
 
 ---
 
@@ -1121,6 +1152,13 @@ validity as Ed25519 public keys.
   by construction.
 - `has_capability` answers correctly for a known code on a certificate that **also** carries
   an unknown code.
+- A `Hello` carrying an unknown algorithm code is accepted. Pinned by
+  `unknown_hello_algorithm_code_is_accepted`.
+- A `Hello` with exactly `MAX_HELLO_ALGS` codes round-trips. Pinned by
+  `encode_decode_symmetry_at_bound_edges`.
+- `AuthTranscriptV1` worst-case encoding is pinned at 4293 bytes, within
+  `MAX_AUTH_TRANSCRIPT_BYTES`. Pinned by
+  `auth_transcript_worst_case_fits_max_auth_transcript_bytes`.
 
 **Negative — each must close the channel**
 

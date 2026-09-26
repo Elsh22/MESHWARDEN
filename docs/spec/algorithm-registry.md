@@ -39,7 +39,7 @@ Invariant 3 is correct where a code is **acted upon** and wrong where a code is
 | Context | Policy | Rationale |
 |---|---|---|
 | An algorithm code that selects a cryptographic operation — e.g. a `Signature`'s algorithm, ADR-017's `auth_algorithm`, a key's algorithm tag | **Must resolve. Unknown → typed rejection** (invariant 3, unchanged). | You cannot verify a signature whose algorithm you cannot identify. Carrying it opaquely means accepting an unverifiable object. |
-| A descriptive advertisement — `NodeCertificate.capabilities`, and (per ADR-017) `Hello.supported_algs` | **Carried opaquely as raw `u16`. Unknown codes are non-fatal and unusable.** | Nothing is acted upon by failing to understand it. The certificate's canonical signing form already carries capabilities as raw `u16` (`CanonicalForm.capabilities: Vec<u16>` in `mw-identity`), so signature verification never requires understanding every code. Hello's current decode still rejects unknowns; see ADR-017 §*Descriptive capability codes* / §*Revisit triggers*. |
+| A descriptive advertisement — `NodeCertificate.capabilities`, and (per ADR-017) `Hello.supported_algs` | **Carried opaquely as raw `u16`. Unknown codes are non-fatal and unusable.** | Nothing is acted upon by failing to understand it. The certificate's canonical signing form already carries capabilities as raw `u16` (`CanonicalForm.capabilities: Vec<u16>` in `mw-identity`), so signature verification never requires understanding every code. As of commit `e5a5501`, Hello decode carries unknown codes (ADR-017 §*Descriptive capability codes*). |
 
 **Security property preserved: never act on a capability you do not understand.**
 Satisfied by construction — an unresolvable code cannot be matched against any
@@ -61,9 +61,8 @@ rejected. A decoder that carried an unknown *signature* algorithm opaquely
 would produce a certificate that decodes cleanly and can never be verified. The
 exception applies to descriptive advertisements only. Today that class is
 `NodeCertificate.capabilities` and — per ADR-017 §*Authoritative source* /
-§*Descriptive capability codes* — `Hello.supported_algs`. Hello's current
-decode still rejects unknown codes; that inconsistency is recorded in ADR-017
-and deferred to the authentication-message slice.
+§*Descriptive capability codes* — `Hello.supported_algs`. As of commit `e5a5501`,
+Hello decode carries unknown codes.
 
 ## Block layout
 
