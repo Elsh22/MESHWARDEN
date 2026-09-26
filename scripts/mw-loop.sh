@@ -27,7 +27,7 @@ for i in $(seq 1 "$max"); do
 
   claude -p "$prompt" \
     --permission-mode acceptEdits \
-    --output-format json \
+    --output-format stream-json --verbose \
     > "$dir/runs/iter-$stamp.json" 2> "$dir/runs/iter-$stamp.err" || true
 
   status=$(head -n1 "$dir/STATUS")
