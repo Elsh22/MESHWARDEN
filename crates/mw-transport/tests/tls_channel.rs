@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use mw_proto::{Frame, Hello, MessageType, WireVersion, alg_from_u16};
+use mw_proto::{Frame, Hello, MessageType, WireVersion};
 use mw_transport::{FramedChannel, accept, client_config, connect, server_config};
 use rustls::pki_types::ServerName;
 
@@ -37,14 +37,9 @@ async fn tls13_hello_frame_round_trips_over_duplex() {
         "client negotiated something other than TLS 1.3"
     );
 
-    // AlgIds via the registry codes: this crate doesn't depend on mw-crypto
-    // in slice 1, so the wire mapping in mw-proto is the way in.
-    let hello = Hello {
-        supported_algs: vec![
-            alg_from_u16(0x0001).expect("ED25519 is registered"),
-            alg_from_u16(0x0010).expect("SHA256 is registered"),
-        ],
-    };
+    // ED25519 and SHA256 by registry code. Hello carries raw registry codes
+    // (ADR-017 Amendment 1), so no AlgId conversion is needed.
+    let hello = Hello::new(vec![0x0001, 0x0010]).expect("hello constructs");
     let sent = Frame::new(
         WireVersion::V1,
         MessageType::Hello,
