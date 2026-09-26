@@ -45,7 +45,7 @@ Base: 09dfd51. Harness commit 385188a, then workspace cargo fmt 09dfd51, which a
     (T8 closes it).
   Commit: chore: format devcert, add fixed-array structural check, refresh roadmap position
 
-- [ ] T1 Slice 4a: scaffold mw-session
+- [x] T1 Slice 4a: scaffold mw-session (commit: see log)
   Needs: T0
   Cite: ADR-017 Crate ownership, Why a new crate, Division of responsibility
   Scope: crates/mw-session/** (new), Cargo.toml (members only), Cargo.lock,

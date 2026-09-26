@@ -1,0 +1,16 @@
+[package]
+name = "mw-session"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# ADR-017 "Crate ownership": mw-session composes mw-crypto, mw-identity, and
+# mw-proto. It must never depend on mw-trust (checked by the "mw-session
+# structure" step of xtask/gate.sh). The mw-transport edge, tokio, and rustls
+# arrive with the driver in Slice 5.
+mw-crypto = { path = "../mw-crypto" }
+mw-identity = { path = "../mw-identity" }
+mw-proto = { path = "../mw-proto" }
+thiserror = { workspace = true }

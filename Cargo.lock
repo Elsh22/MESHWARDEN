@@ -561,6 +561,16 @@ name = "mw-sandbox"
 version = "0.1.0"
 
 [[package]]
+name = "mw-session"
+version = "0.1.0"
+dependencies = [
+ "mw-crypto",
+ "mw-identity",
+ "mw-proto",
+ "thiserror",
+]
+
+[[package]]
 name = "mw-sim"
 version = "0.1.0"
 

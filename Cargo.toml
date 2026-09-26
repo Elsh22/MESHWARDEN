@@ -14,6 +14,7 @@ members = [
     "crates/mw-store",
     "crates/mw-telemetry",
     "crates/mw-testkit",
+    "crates/mw-session",
     "bin/mw-agent",
     "bin/mw-ca",
     "bin/mw-control",
