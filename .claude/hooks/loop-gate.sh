@@ -3,7 +3,7 @@
 # or uncommitted work. Capped so it can never spin forever.
 set -u
 cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
-dir=.claude/loop
+dir=ops/loop
 status=$(head -n1 "$dir/STATUS" 2>/dev/null || echo IDLE)
 [ "$status" = "RUNNING" ] || exit 0
 

@@ -11,7 +11,7 @@ A hook blocks you from editing files. Never run commands that change state:
 no git add/commit/restore, no cargo fmt without --check, no file redirection.
 
 ## Inputs
-The caller gives you a task ID, the task text from .claude/loop/QUEUE.md, and
+The caller gives you a task ID, the task text from ops/loop/QUEUE.md, and
 the changed files. Get the actual change yourself with `git diff --cached`.
 Don't trust summaries; the diff and the ADR are the only sources.
 

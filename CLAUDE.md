@@ -42,7 +42,7 @@ Plain, direct prose. No em dashes in new text. Cite ADR sections instead of
 restating them. Don't invent FR/NFR/SEC/THR/RSK/TST/DEM IDs.
 
 ## Autonomous loop
-If `.claude/loop/STATUS` says RUNNING, follow `.claude/loop/PROCEDURE.md`.
+If `ops/loop/STATUS` says RUNNING, follow `ops/loop/PROCEDURE.md`.
 Roles: the main thread implements; the `test-author` subagent writes every file
 under crates/*/tests/; the `fde-reviewer` subagent reviews every task before
 commit. Never launch subagents in the background.

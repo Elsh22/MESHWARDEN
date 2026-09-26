@@ -50,7 +50,7 @@
       "Edit(.claude/hooks/**)",
       "Edit(.claude/agents/**)",
       "Edit(.claude/skills/**)",
-      "Edit(.claude/loop/PROCEDURE.md)",
+      "Edit(ops/loop/PROCEDURE.md)",
       "Edit(.cursor/**)",
       "Edit(CLAUDE.md)",
       "Edit(deny.toml)",

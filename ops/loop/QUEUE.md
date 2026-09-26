@@ -13,6 +13,7 @@ Base: 09dfd51. Harness commit 385188a, then workspace cargo fmt 09dfd51, which a
   UnknownMessageType, cumulative pre-auth bytes) stay with the driver (Slice 5).
 - The machine takes `policy_max_session_duration` as an input. No default value
   is chosen in Slice 4.
+- Durations and times in mw-session are u64 Unix seconds, matching NodeCertificate valid_from/valid_until. policy_max_session_duration is a u64 seconds input (core::time is banned by the purity check). Computing session_valid_until must never wrap: use checked or saturating arithmetic and test the u64::MAX edge.
 - NodeId (crates/mw-identity/src/node_id.rs) keeps its in-memory `prefix: [u8; NODE_ID_PREFIX_LEN]`. It is not a wire or spec field: NodeId serializes only as its 34-char text form (collect_str / deserialize_str), so crypto-boundary.mdc does not apply. Do not flag or change it. Record in the T9 memo for ADR-017 Rev 7.
 
 ## Maintainer-only (always STOP, never decide)
@@ -156,7 +157,7 @@ Base: 09dfd51. Harness commit 385188a, then workspace cargo fmt 09dfd51, which a
 - [ ] T7 Slice 4 close-out
   Needs: T6
   Cite: docs-discipline.mdc; roadmap "Testing obligation coverage"
-  Scope: docs/07-roadmap.md, .claude/loop/runs/SLICE-4-REPORT.md
+  Scope: docs/07-roadmap.md, ops/loop/runs/SLICE-4-REPORT.md
   Do: update every coverage row Slice 4 touched (Planned/Partial -> Covered
   with exact test names, or leave Partial with the reason). Add the Slice 4
   row to Completed work. Update Current position. Write SLICE-4-REPORT.md: a
@@ -183,7 +184,7 @@ Base: 09dfd51. Harness commit 385188a, then workspace cargo fmt 09dfd51, which a
 
 - [ ] T9 Decision memo, then stop
   Needs: T8
-  Scope: .claude/loop/runs/DECISION-MEMO.md only
+  Scope: ops/loop/runs/DECISION-MEMO.md only
   Do: write a memo for the maintainer covering, with ADR quotes and
   consequences, but NO recommendation presented as decided:
   1. Hello placement relative to AUTH_INIT: options, effect on the 16384-byte

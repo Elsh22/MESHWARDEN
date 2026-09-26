@@ -5,18 +5,18 @@ one task, commit it, write its report, and stop. The outer script starts a fresh
 session for the next task.
 
 ## 0. Orient
-1. Read `.claude/loop/STATUS`. If it is not `RUNNING`, stop immediately.
-2. Read `.claude/loop/QUEUE.md`, including "Decisions in force" and
+1. Read `ops/loop/STATUS`. If it is not `RUNNING`, stop immediately.
+2. Read `ops/loop/QUEUE.md`, including "Decisions in force" and
    "Maintainer-only". Pick the FIRST task whose box is `- [ ]`.
    If none remain, write `DONE` to STATUS and stop.
 3. If any task listed in its `Needs:` is unchecked, write `BLOCKED` to STATUS,
-   explain in `.claude/loop/BLOCKED.md`, and stop.
+   explain in `ops/loop/BLOCKED.md`, and stop.
 4. Run `git status --porcelain`. If the tree is dirty from a previous run, do
    not build on it. Write BLOCKED with the dirty file list and stop.
 5. Read every ADR section, spec, and file the task cites. Read CLAUDE.md rules.
 
 ## 1. Plan
-Write a short plan to `.claude/loop/runs/<TASK-ID>.md` under a "Plan" heading:
+Write a short plan to `ops/loop/runs/<TASK-ID>.md` under a "Plan" heading:
 files to touch, ADR sections relied on, the tests you expect, and every
 assumption. If the ADR is silent or contradictory on something the task needs,
 that is a STOP condition (section 6), not a judgement call.
@@ -68,7 +68,7 @@ is the point of the question, in which case list them.
 - A test from test-author and the implementation disagree and the ADR doesn't
   settle which is right.
 
-## Run report format (.claude/loop/runs/<TASK-ID>.md)
+## Run report format (ops/loop/runs/<TASK-ID>.md)
 1. Plan (from step 1).
 2. What changed, per file, one or two lines each.
 3. ADR obligations covered -> test names (exact fn names).

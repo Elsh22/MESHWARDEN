@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-dir=.claude/loop
+dir=ops/loop
 max="${MW_MAX_ITERS:-12}"
 mkdir -p "$dir/runs"
 
@@ -18,7 +18,7 @@ fi
 echo RUNNING > "$dir/STATUS"
 echo 0 > "$dir/.stop_blocks"
 
-prompt='Read CLAUDE.md, then follow .claude/loop/PROCEDURE.md exactly for ONE task. Stop after committing it (or after writing BLOCKED/DONE).'
+prompt='Read CLAUDE.md, then follow ops/loop/PROCEDURE.md exactly for ONE task. Stop after committing it (or after writing BLOCKED/DONE).'
 
 for i in $(seq 1 "$max"); do
   before=$(git rev-parse HEAD)
