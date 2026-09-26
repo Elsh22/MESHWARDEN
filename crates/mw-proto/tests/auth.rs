@@ -634,6 +634,56 @@ fn encode_decode_symmetry_at_bound_edges() {
 }
 
 #[test]
+fn hello_bound_plus_one_is_rejected_at_exact_edge() {
+    assert_eq!(
+        MAX_HELLO_ALGS, 64,
+        "fixtures below are written for a bound of 64"
+    );
+
+    // Constructor side: 65 codes is one over the bound.
+    assert_eq!(
+        Hello::new((0..65u16).collect()),
+        Err(Error::BoundExceeded {
+            declared: 65,
+            max: 64
+        })
+    );
+
+    // Wire form is a bare postcard sequence: count varint, then each code as a
+    // varint. Codes 0x00..=0x40 are all single-byte varints.
+    let mut at_bound = vec![0x40u8];
+    at_bound.extend(0x00u8..=0x3F);
+    let mut plus_one = vec![0x41u8];
+    plus_one.extend(0x00u8..=0x40);
+    assert_eq!(at_bound.len(), 65);
+    assert_eq!(plus_one.len(), 66);
+
+    // The encoder produces the hand-written at-bound fixture exactly.
+    assert_eq!(
+        Hello::new((0..64u16).collect())
+            .unwrap()
+            .to_bytes()
+            .unwrap(),
+        at_bound
+    );
+
+    // At-bound fixture decodes, so the +1 rejection is the bound check, not malformed input.
+    let hello = Hello::from_bytes(&at_bound).expect("64 codes is at the bound");
+    assert_eq!(
+        hello.algorithm_codes(),
+        (0..64u16).collect::<Vec<_>>().as_slice()
+    );
+
+    assert_eq!(
+        Hello::from_bytes(&plus_one),
+        Err(Error::BoundExceeded {
+            declared: 65,
+            max: 64
+        })
+    );
+}
+
+#[test]
 fn message_type_codes_and_from_u16_are_exhaustive() {
     assert_eq!(MessageType::Hello.as_u16(), 0x0001);
     assert_eq!(MessageType::AuthInit.as_u16(), 0x0002);
