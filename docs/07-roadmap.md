@@ -44,7 +44,7 @@ Slice numbers are maintainer-confirmed. Rows without a slice number predate slic
 
 ## Current position
 
-HEAD is `e5a5501`. After this slice, ADR-017 is Revision 6. `mw-proto` has the authentication messages and `AuthTranscriptV1`. `mw-identity` has the certificate wire form and verify ordering. `mw-transport` has the TLS channel. There is no `mw-session` crate. `crates/mw-session` is not in the workspace members list.
+This section is as of `09dfd51`, where ADR-017 is Revision 6. The Repair (post-Slice 3) slice has landed, and `09dfd51` applied `cargo fmt` across the workspace. `mw-proto` has the authentication messages and `AuthTranscriptV1`. `mw-identity` has the certificate wire form and verify ordering. `mw-transport` has the TLS channel. There is no `mw-session` crate. `crates/mw-session` is not in the workspace members list.
 
 ## Next: Slice 4, mw-session::machine
 
@@ -163,7 +163,7 @@ One row per row of ADR-017 §*Testing obligations*, as of the Repair (post-Slice
 | `cargo tree -p mw-session --depth 1` has no `mw-trust` | structural | Planned | None; crate does not exist | Slice 4 |
 | No clock read, socket, timer, or sleep in `mw-session::machine` | structural | Planned | None | Slice 4 |
 | No private key type reachable from `AuthMachine` | structural | Planned | None | Slice 4 |
-| No fixed-size crypto array in any `mw-proto` wire or spec structure | structural | Gap | No test or defined check | None |
+| No fixed-size crypto array in any `mw-proto` wire or spec structure | structural | Covered | `xtask/check-no-fixed-crypto-arrays.sh` fails on any `[u8; N]` array type outside comments and string or char literals in `crates/mw-proto/src`. Its self-test includes non-array `u8;` controls. `xtask/gate.sh` runs it and its `--self-test`. | Done |
 
 **Outside ADR-017's list**
 
@@ -171,7 +171,7 @@ One row per row of ADR-017 §*Testing obligations*, as of the Repair (post-Slice
 |---|---|---|---|---|
 | `Hello` at `MAX_HELLO_ALGS + 1` rejected as `BoundExceeded { declared: 65, max: 64 }` on construct and decode | decode | Covered | `hello_bound_plus_one_is_rejected_at_exact_edge` (mw-proto) | Done |
 
-Counts over the 55 ADR-017 rows: 18 Covered, 13 Partial, 22 Planned, 2 Gap.
+Counts over the 55 ADR-017 rows: 19 Covered, 13 Partial, 22 Planned, 1 Gap.
 
 ## Open decisions
 

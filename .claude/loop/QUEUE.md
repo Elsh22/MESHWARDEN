@@ -25,7 +25,7 @@ Base: 09dfd51. Harness commit 385188a, then workspace cargo fmt 09dfd51, which a
 
 ---
 
-- [ ] T0 Housekeeping
+- [x] T0 Housekeeping (commit: see log)
   Needs: none
   Cite: repair slice report items 1, 2, 6; ADR-017 Testing obligations (Structural)
   Scope: crates/mw-transport/src/devcert.rs (formatting only),
