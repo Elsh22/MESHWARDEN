@@ -53,7 +53,11 @@ pub fn generate() -> Result<(CertificateDer<'static>, PrivateKeyDer<'static>)> {
 
     let key = p256::ecdsa::SigningKey::random(&mut rand_core::OsRng);
     let signer = P256Signer {
-        public_key_sec1: key.verifying_key().to_encoded_point(false).as_bytes().to_vec(),
+        public_key_sec1: key
+            .verifying_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec(),
         key: key.clone(),
     };
 

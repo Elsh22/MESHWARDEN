@@ -67,11 +67,13 @@ impl PublicKey {
     /// input and byte strings that are not valid Ed25519 points, without
     /// panicking.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let raw: &[u8; PUBLIC_KEY_LEN] = bytes
-            .try_into()
-            .map_err(|_| Error::MalformedKey { alg: AlgId::Ed25519 })?;
-        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(raw)
-            .map_err(|_| Error::MalformedKey { alg: AlgId::Ed25519 })?;
+        let raw: &[u8; PUBLIC_KEY_LEN] = bytes.try_into().map_err(|_| Error::MalformedKey {
+            alg: AlgId::Ed25519,
+        })?;
+        let verifying_key =
+            ed25519_dalek::VerifyingKey::from_bytes(raw).map_err(|_| Error::MalformedKey {
+                alg: AlgId::Ed25519,
+            })?;
         Ok(Self { verifying_key })
     }
 
