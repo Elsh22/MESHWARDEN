@@ -13,6 +13,7 @@ Base: 09dfd51. Harness commit 385188a, then workspace cargo fmt 09dfd51, which a
   UnknownMessageType, cumulative pre-auth bytes) stay with the driver (Slice 5).
 - The machine takes `policy_max_session_duration` as an input. No default value
   is chosen in Slice 4.
+- NodeId (crates/mw-identity/src/node_id.rs) keeps its in-memory `prefix: [u8; NODE_ID_PREFIX_LEN]`. It is not a wire or spec field: NodeId serializes only as its 34-char text form (collect_str / deserialize_str), so crypto-boundary.mdc does not apply. Do not flag or change it. Record in the T9 memo for ADR-017 Rev 7.
 
 ## Maintainer-only (always STOP, never decide)
 - Any edit to docs/adr/** or docs/spec/** (ADR revisions, amendments, rows).
@@ -193,6 +194,7 @@ Base: 09dfd51. Harness commit 385188a, then workspace cargo fmt 09dfd51, which a
      in T8; any flagged choices from SLICE-4-REPORT.md.
   3. Slice 5 prerequisites checklist.
   4. ADR-016 provider risk: rustls-rustcrypto 0.0.2-alpha has had no release since April 2024 and pins rustls-webpki 0.102.8 and rsa. Their advisories are ignored in deny.toml with reachability reasons. List the options for replacing the provider and what each would need in ADR-016.
+  5. NodeId fixed-array exemption (see Decisions in force) to record in ADR-017 Rev 7.
   Then write BLOCKED to STATUS with "Maintainer decision required before
   Slice 5" in BLOCKED.md.
   Commit: docs(loop): decision memo for Slice 5 prerequisites
